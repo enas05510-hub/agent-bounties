@@ -276,29 +276,24 @@ function createX402Middleware(
  * come from the Cloudflare Worker environment.
  */
 app.use(
-  "*",
+  "/scan",
   async (c, next) => {
     try {
-      const middleware =
-        createX402Middleware(c.env);
-
+      const middleware = createX402Middleware(c.env);
       return middleware(c, next);
     } catch (error) {
-      console.warn(
-        "x402 configuration error:",
-        error
-      );
+      console.warn("x402 configuration error:", error);
 
       return c.json(
         {
-          error:
-            "Payment service is not configured",
+          error: "Payment service is not configured",
         },
         500
       );
     }
   }
 );
+    
 
 app.get(
   "/health",
