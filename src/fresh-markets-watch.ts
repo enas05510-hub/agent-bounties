@@ -252,8 +252,8 @@ function createX402Middleware(
   }
 
   const network =
-    env.X402_NETWORK ??
-    "eip155:84532";
+    (env.X402_NETWORK ??
+      "eip155:84532") as `${string}:${string}`;
 
   const price =
     env.X402_PRICE ??
