@@ -238,12 +238,6 @@ function createX402Middleware(
       facilitator
     );
 
-  /*
-   * Deliberately use the literal here.
-   * This prevents Cloudflare's generated
-   * environment type from widening the value
-   * to plain string.
-   */
   resourceServer.register(
     "eip155:84532",
     new ExactEvmScheme()
@@ -271,8 +265,18 @@ function createX402Middleware(
   );
 }
 
+/*
+ * x402 must be registered at the app level.
+ *
+ * The middleware itself decides which routes are protected
+ * from the route table above. Therefore /health and /webhook
+ * continue normally, while POST /scan is protected.
+ *
+ * We create it per request because PAY_TO and other values
+ * come from the Cloudflare Worker environment.
+ */
 app.use(
-  "/scan",
+  "*",
   async (c, next) => {
     try {
       const middleware =
