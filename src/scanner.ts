@@ -1,3 +1,4 @@
+```ts
 import { ethers } from "ethers";
 
 import {
@@ -16,6 +17,16 @@ import {
 import {
   extractInitialHolders,
 } from "./holders";
+
+const V2_FACTORY_INTERFACE =
+  new ethers.Interface([
+    "event PairCreated(address indexed token0,address indexed token1,address pair,uint256)",
+  ]);
+
+const V3_FACTORY_INTERFACE =
+  new ethers.Interface([
+    "event PoolCreated(address indexed token0,address indexed token1,uint24 indexed fee,int24 tickSpacing,address pool)",
+  ]);
 
 const PAIR_CREATED_TOPIC =
   ethers.id(
@@ -46,23 +57,6 @@ function normalizeAddress(
   return ethers
     .getAddress(address)
     .toLowerCase();
-}
-
-function topicToAddress(
-  topic: string
-): string {
-  if (
-    typeof topic !== "string" ||
-    topic.length < 42
-  ) {
-    throw new Error(
-      "Invalid indexed address topic"
-    );
-  }
-
-  return ethers.getAddress(
-    `0x${topic.slice(-40)}`
-  );
 }
 
 function getProvider(
@@ -191,11 +185,30 @@ async function parseV2Factory(
 
   for (const log of logs) {
     try {
-      if (
-        log.topics.length < 4
-      ) {
+      const parsed =
+        V2_FACTORY_INTERFACE.parseLog({
+          topics: log.topics,
+          data: log.data,
+        });
+
+      if (!parsed) {
         continue;
       }
+
+      const token0 =
+        ethers.getAddress(
+          String(parsed.args[0])
+        );
+
+      const token1 =
+        ethers.getAddress(
+          String(parsed.args[1])
+        );
+
+      const pair =
+        ethers.getAddress(
+          String(parsed.args[2])
+        );
 
       events.push({
         factory:
@@ -203,20 +216,12 @@ async function parseV2Factory(
             factory
           ),
 
-        token0:
-          topicToAddress(
-            log.topics[1]
-          ),
+        token0,
 
-        token1:
-          topicToAddress(
-            log.topics[2]
-          ),
+        token1,
 
         pair_address:
-          topicToAddress(
-            log.topics[3]
-          ),
+          pair,
 
         tx_hash:
           log.transactionHash,
@@ -226,8 +231,11 @@ async function parseV2Factory(
 
         isV3: false,
       });
-    } catch {
-      continue;
+    } catch (error) {
+      console.warn(
+        `Failed to decode V2 PairCreated log in ${factory}:`,
+        error
+      );
     }
   }
 
@@ -255,39 +263,29 @@ async function parseV3Factory(
 
   for (const log of logs) {
     try {
-      /*
-       * Uniswap/Pancake V3 PoolCreated:
-       *
-       * topics[1] = token0
-       * topics[2] = token1
-       * topics[3] = fee
-       *
-       * data =
-       *   tickSpacing,
-       *   pool
-       */
-      if (
-        log.topics.length < 4 ||
-        !log.data
-      ) {
+      const parsed =
+        V3_FACTORY_INTERFACE.parseLog({
+          topics: log.topics,
+          data: log.data,
+        });
+
+      if (!parsed) {
         continue;
       }
 
-      const decoded =
-        ethers
-          .AbiCoder
-          .defaultAbiCoder()
-          .decode(
-            [
-              "int24",
-              "address",
-            ],
-            log.data
-          );
+      const token0 =
+        ethers.getAddress(
+          String(parsed.args[0])
+        );
+
+      const token1 =
+        ethers.getAddress(
+          String(parsed.args[1])
+        );
 
       const pool =
         ethers.getAddress(
-          String(decoded[1])
+          String(parsed.args[4])
         );
 
       events.push({
@@ -296,15 +294,9 @@ async function parseV3Factory(
             factory
           ),
 
-        token0:
-          topicToAddress(
-            log.topics[1]
-          ),
+        token0,
 
-        token1:
-          topicToAddress(
-            log.topics[2]
-          ),
+        token1,
 
         pair_address:
           pool,
@@ -317,8 +309,11 @@ async function parseV3Factory(
 
         isV3: true,
       });
-    } catch {
-      continue;
+    } catch (error) {
+      console.warn(
+        `Failed to decode V3 PoolCreated log in ${factory}:`,
+        error
+      );
     }
   }
 
@@ -539,7 +534,9 @@ async function processEvents(
       );
 
     const key =
-      `pair:${chain}:${pairAddress}`;
+      `pair:${chain}:${normalizeAddress(
+        pairAddress
+      )}`;
 
     try {
       if (
@@ -661,3 +658,4 @@ export async function handleCron(
     }
   }
 }
+```
