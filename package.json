@@ -4,8 +4,10 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit",
-    "test": "vitest run"
+    "generate-types": "wrangler types",
+    "build": "wrangler types && tsc --noEmit",
+    "test": "vitest run",
+    "deploy": "wrangler deploy"
   },
   "dependencies": {
     "@x402/core": "^2.28.0",
@@ -15,8 +17,8 @@
     "hono": "^4.13.10"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260929.0",
     "typescript": "^5.9.2",
-    "vitest": "^3.2.4"
+    "vitest": "^3.2.4",
+    "wrangler": "^4.45.0"
   }
 }
