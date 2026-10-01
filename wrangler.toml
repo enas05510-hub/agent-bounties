@@ -1,4 +1,4 @@
-name = "fresh-markets-watch"
+name = "agent-bounties"
 
 main = "src/fresh-markets-watch.ts"
 
