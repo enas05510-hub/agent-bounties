@@ -6,9 +6,7 @@ import {
   NewPair,
 } from "./types";
 
-import {
-  CHAINS,
-} from "./chains";
+import { CHAINS } from "./chains";
 
 import {
   KVNamespaceLike,
@@ -29,11 +27,7 @@ const POOL_CREATED_TOPIC =
     "PoolCreated(address,address,uint24,int24,address)"
   );
 
-const ZERO_ADDRESS =
-  "0x0000000000000000000000000000000000000000";
-
 const MAX_BLOCK_RANGE = 2_000;
-
 const MAX_PAIRS_PER_RUN = 100;
 
 interface FactoryEvent {
@@ -79,44 +73,24 @@ function getProvider(
   );
 }
 
-function isV3Factory(
-  chain: ChainName,
-  factory: string
-): boolean {
-  return (
-    normalizeAddress(
-      factory
-    ) ===
-    normalizeAddress(
-      FACTORIES[chain][1]
-    )
-  );
-}
-
-function getFactoryFilter(
+function getV2Factories(
   chain: ChainName
 ): string[] {
-  return FACTORIES[chain].map(
-    normalizeAddress
-  );
+  return [
+    ethers.getAddress(
+      FACTORIES[chain][0]
+    ),
+  ];
 }
 
-async function getLatestBlock(
-  provider: ethers.JsonRpcProvider
-): Promise<number> {
-  const block =
-    await provider.getBlockNumber();
-
-  if (
-    !Number.isSafeInteger(block) ||
-    block < 0
-  ) {
-    throw new Error(
-      "Invalid latest block number"
-    );
-  }
-
-  return block;
+function getV3Factories(
+  chain: ChainName
+): string[] {
+  return [
+    ethers.getAddress(
+      FACTORIES[chain][1]
+    ),
+  ];
 }
 
 async function getTokenSymbol(
@@ -133,10 +107,9 @@ async function getTokenSymbol(
         provider
       );
 
-    const symbol =
-      await contract.symbol();
-
-    return String(symbol);
+    return String(
+      await contract.symbol()
+    );
   } catch {
     return "UNKNOWN";
   }
@@ -165,7 +138,6 @@ async function getV2Reserves(
     return {
       token0_raw:
         reserves[0].toString(),
-
       token1_raw:
         reserves[1].toString(),
     };
@@ -185,12 +157,6 @@ async function getInitialLiquidity(
   token0_raw: string;
   token1_raw: string;
 }> {
-  /*
-   * V3 does not expose the V2 getReserves()
-   * interface. The scanner therefore records
-   * zero here until a V3-specific liquidity
-   * calculation is performed.
-   */
   if (isV3) {
     return {
       token0_raw: "0",
@@ -204,7 +170,7 @@ async function getInitialLiquidity(
   );
 }
 
-async function parseV2Logs(
+async function parseV2Factory(
   provider: ethers.JsonRpcProvider,
   factory: string,
   fromBlock: number,
@@ -223,31 +189,13 @@ async function parseV2Logs(
   const events:
     FactoryEvent[] = [];
 
-  for (
-    const log of logs
-  ) {
+  for (const log of logs) {
     try {
       if (
-        log.topics.length <
-        4
+        log.topics.length < 4
       ) {
         continue;
       }
-
-      const token0 =
-        topicToAddress(
-          log.topics[1]
-        );
-
-      const token1 =
-        topicToAddress(
-          log.topics[2]
-        );
-
-      const pairAddress =
-        topicToAddress(
-          log.topics[3]
-        );
 
       events.push({
         factory:
@@ -255,12 +203,20 @@ async function parseV2Logs(
             factory
           ),
 
-        token0,
+        token0:
+          topicToAddress(
+            log.topics[1]
+          ),
 
-        token1,
+        token1:
+          topicToAddress(
+            log.topics[2]
+          ),
 
         pair_address:
-          pairAddress,
+          topicToAddress(
+            log.topics[3]
+          ),
 
         tx_hash:
           log.transactionHash,
@@ -278,7 +234,7 @@ async function parseV2Logs(
   return events;
 }
 
-async function parseV3Logs(
+async function parseV3Factory(
   provider: ethers.JsonRpcProvider,
   factory: string,
   fromBlock: number,
@@ -297,30 +253,22 @@ async function parseV3Logs(
   const events:
     FactoryEvent[] = [];
 
-  for (
-    const log of logs
-  ) {
+  for (const log of logs) {
     try {
+      /*
+       * Uniswap/Pancake V3 PoolCreated:
+       *
+       * topics[1] = token0
+       * topics[2] = token1
+       * topics[3] = fee
+       *
+       * data =
+       *   tickSpacing,
+       *   pool
+       */
       if (
-        log.topics.length <
-        4
-      ) {
-        continue;
-      }
-
-      const token0 =
-        topicToAddress(
-          log.topics[1]
-        );
-
-      const token1 =
-        topicToAddress(
-          log.topics[2]
-        );
-
-      if (
-        !log.data ||
-        log.data === "0x"
+        log.topics.length < 4 ||
+        !log.data
       ) {
         continue;
       }
@@ -331,16 +279,15 @@ async function parseV3Logs(
           .defaultAbiCoder()
           .decode(
             [
-              "address",
               "int24",
               "address",
             ],
             log.data
           );
 
-      const pairAddress =
+      const pool =
         ethers.getAddress(
-          String(decoded[2])
+          String(decoded[1])
         );
 
       events.push({
@@ -349,12 +296,18 @@ async function parseV3Logs(
             factory
           ),
 
-        token0,
+        token0:
+          topicToAddress(
+            log.topics[1]
+          ),
 
-        token1,
+        token1:
+          topicToAddress(
+            log.topics[2]
+          ),
 
         pair_address:
-          pairAddress,
+          pool,
 
         tx_hash:
           log.transactionHash,
@@ -372,47 +325,57 @@ async function parseV3Logs(
   return events;
 }
 
-async function discoverFactoryEvents(
+async function discoverEvents(
   provider: ethers.JsonRpcProvider,
   chain: ChainName,
   fromBlock: number,
   toBlock: number
 ): Promise<FactoryEvent[]> {
-  const factories =
-    getFactoryFilter(
-      chain
-    );
-
   const events:
     FactoryEvent[] = [];
 
   for (
-    const factory of factories
+    const factory of getV2Factories(
+      chain
+    )
   ) {
-    const v3 =
-      isV3Factory(
-        chain,
-        factory
+    try {
+      events.push(
+        ...await parseV2Factory(
+          provider,
+          factory,
+          fromBlock,
+          toBlock
+        )
       );
+    } catch (error) {
+      console.warn(
+        `V2 scan failed for ${factory}:`,
+        error
+      );
+    }
+  }
 
-    const found =
-      v3
-        ? await parseV3Logs(
-            provider,
-            factory,
-            fromBlock,
-            toBlock
-          )
-        : await parseV2Logs(
-            provider,
-            factory,
-            fromBlock,
-            toBlock
-          );
-
-    events.push(
-      ...found
-    );
+  for (
+    const factory of getV3Factories(
+      chain
+    )
+  ) {
+    try {
+      events.push(
+        ...await parseV3Factory(
+          provider,
+          factory,
+          fromBlock,
+          toBlock
+        )
+      );
+    } catch (error) {
+      console.warn(
+        `V3 scan failed for ${factory}:`,
+        error
+      );
+    }
   }
 
   return events;
@@ -448,50 +411,54 @@ async function buildNewPair(
       return null;
     }
 
-    const block =
-      await provider.getBlock(
-        event.block_number
-      );
-
     const [
       symbol0,
       symbol1,
       liquidity,
       holders,
-    ] =
-      await Promise.all([
-        getTokenSymbol(
-          provider,
-          event.token0
-        ),
+      block,
+    ] = await Promise.all([
+      getTokenSymbol(
+        provider,
+        event.token0
+      ),
 
-        getTokenSymbol(
-          provider,
-          event.token1
-        ),
+      getTokenSymbol(
+        provider,
+        event.token1
+      ),
 
-        getInitialLiquidity(
-          provider,
+      getInitialLiquidity(
+        provider,
+        event.pair_address,
+        event.isV3
+      ),
+
+      extractInitialHolders({
+        tx_hash:
+          event.tx_hash,
+        chain,
+        pair_address:
           event.pair_address,
-          event.isV3
-        ),
+        token0:
+          event.token0,
+        token1:
+          event.token1,
+      }),
 
-        extractInitialHolders({
-          tx_hash:
-            event.tx_hash,
+      provider.getBlock(
+        event.block_number
+      ),
+    ]);
 
-          chain,
-
-          pair_address:
-            event.pair_address,
-
-          token0:
-            event.token0,
-
-          token1:
-            event.token1,
-        }),
-      ]);
+    const createdAt =
+      block
+        ? new Date(
+            Number(
+              block.timestamp
+            ) * 1000
+          ).toISOString()
+        : new Date().toISOString();
 
     return {
       pair_address:
@@ -530,13 +497,7 @@ async function buildNewPair(
         holders,
 
       created_at:
-        block
-          ? new Date(
-              Number(
-                block.timestamp
-              ) * 1000
-            ).toISOString()
-          : new Date().toISOString(),
+        createdAt,
 
       block_number:
         event.block_number,
@@ -559,44 +520,26 @@ async function processEvents(
   chain: ChainName,
   events: FactoryEvent[],
   store: KVStoreImpl
-): Promise<number> {
-  let saved = 0;
-
-  const seen =
-    new Set<string>();
+): Promise<void> {
+  let processed = 0;
 
   for (
     const event of events
   ) {
     if (
-      saved >=
+      processed >=
       MAX_PAIRS_PER_RUN
     ) {
       break;
     }
 
     const pairAddress =
-      normalizeAddress(
+      ethers.getAddress(
         event.pair_address
       );
 
-    if (
-      pairAddress ===
-      ZERO_ADDRESS
-    ) {
-      continue;
-    }
-
     const key =
       `pair:${chain}:${pairAddress}`;
-
-    if (
-      seen.has(key)
-    ) {
-      continue;
-    }
-
-    seen.add(key);
 
     try {
       if (
@@ -623,16 +566,14 @@ async function processEvents(
         pair
       );
 
-      saved++;
+      processed++;
     } catch (error) {
       console.warn(
-        `Failed processing ${pairAddress}:`,
+        `Failed processing pair ${pairAddress}:`,
         error
       );
     }
   }
-
-  return saved;
 }
 
 export async function handleCron(
@@ -654,15 +595,8 @@ export async function handleCron(
         getProvider(chain);
 
       const latestBlock =
-        await getLatestBlock(
-          provider
-        );
+        await provider.getBlockNumber();
 
-      /*
-       * Cron runs every 10 minutes.
-       * Scan 15 minutes to provide overlap
-       * and protect against missed webhook events.
-       */
       const blocksPerMinute =
         CHAINS[chain]
           .blocks_per_minute;
@@ -675,10 +609,6 @@ export async function handleCron(
               blocksPerMinute
         );
 
-      /*
-       * Split large RPC ranges into smaller
-       * chunks to avoid provider limits.
-       */
       let fromBlock =
         requestedFrom;
 
@@ -696,7 +626,7 @@ export async function handleCron(
 
         try {
           const events =
-            await discoverFactoryEvents(
+            await discoverEvents(
               provider,
               chain,
               fromBlock,
@@ -715,7 +645,7 @@ export async function handleCron(
           }
         } catch (error) {
           console.warn(
-            `Failed scanning ${chain} blocks ${fromBlock}-${toBlock}:`,
+            `Failed scanning ${chain} ${fromBlock}-${toBlock}:`,
             error
           );
         }
