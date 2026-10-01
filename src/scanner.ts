@@ -1,4 +1,3 @@
-```ts
 import { ethers } from "ethers";
 
 import {
@@ -28,17 +27,15 @@ const V3_FACTORY_INTERFACE =
     "event PoolCreated(address indexed token0,address indexed token1,uint24 indexed fee,int24 tickSpacing,address pool)",
   ]);
 
-const PAIR_CREATED_TOPIC =
-  ethers.id(
-    "PairCreated(address,address,address,uint256)"
-  );
+const PAIR_CREATED_TOPIC = ethers.id(
+  "PairCreated(address,address,address,uint256)"
+);
 
-const POOL_CREATED_TOPIC =
-  ethers.id(
-    "PoolCreated(address,address,uint24,int24,address)"
-  );
+const POOL_CREATED_TOPIC = ethers.id(
+  "PoolCreated(address,address,uint24,int24,address)"
+);
 
-const MAX_BLOCK_RANGE = 2_000;
+const MAX_BLOCK_RANGE = 2000;
 const MAX_PAIRS_PER_RUN = 100;
 
 interface FactoryEvent {
@@ -180,8 +177,7 @@ async function parseV2Factory(
       toBlock,
     });
 
-  const events:
-    FactoryEvent[] = [];
+  const events: FactoryEvent[] = [];
 
   for (const log of logs) {
     try {
@@ -212,23 +208,14 @@ async function parseV2Factory(
 
       events.push({
         factory:
-          ethers.getAddress(
-            factory
-          ),
-
+          ethers.getAddress(factory),
         token0,
-
         token1,
-
-        pair_address:
-          pair,
-
+        pair_address: pair,
         tx_hash:
           log.transactionHash,
-
         block_number:
           log.blockNumber,
-
         isV3: false,
       });
     } catch (error) {
@@ -258,8 +245,7 @@ async function parseV3Factory(
       toBlock,
     });
 
-  const events:
-    FactoryEvent[] = [];
+  const events: FactoryEvent[] = [];
 
   for (const log of logs) {
     try {
@@ -290,23 +276,14 @@ async function parseV3Factory(
 
       events.push({
         factory:
-          ethers.getAddress(
-            factory
-          ),
-
+          ethers.getAddress(factory),
         token0,
-
         token1,
-
-        pair_address:
-          pool,
-
+        pair_address: pool,
         tx_hash:
           log.transactionHash,
-
         block_number:
           log.blockNumber,
-
         isV3: true,
       });
     } catch (error) {
@@ -326,22 +303,22 @@ async function discoverEvents(
   fromBlock: number,
   toBlock: number
 ): Promise<FactoryEvent[]> {
-  const events:
-    FactoryEvent[] = [];
+  const events: FactoryEvent[] = [];
 
   for (
-    const factory of getV2Factories(
-      chain
-    )
+    const factory of getV2Factories(chain)
   ) {
     try {
-      events.push(
-        ...await parseV2Factory(
+      const factoryEvents =
+        await parseV2Factory(
           provider,
           factory,
           fromBlock,
           toBlock
-        )
+        );
+
+      events.push(
+        ...factoryEvents
       );
     } catch (error) {
       console.warn(
@@ -352,18 +329,19 @@ async function discoverEvents(
   }
 
   for (
-    const factory of getV3Factories(
-      chain
-    )
+    const factory of getV3Factories(chain)
   ) {
     try {
-      events.push(
-        ...await parseV3Factory(
+      const factoryEvents =
+        await parseV3Factory(
           provider,
           factory,
           fromBlock,
           toBlock
-        )
+        );
+
+      events.push(
+        ...factoryEvents
       );
     } catch (error) {
       console.warn(
@@ -449,9 +427,7 @@ async function buildNewPair(
     const createdAt =
       block
         ? new Date(
-            Number(
-              block.timestamp
-            ) * 1000
+            Number(block.timestamp) * 1000
           ).toISOString()
         : new Date().toISOString();
 
@@ -472,16 +448,15 @@ async function buildNewPair(
             ethers.getAddress(
               event.token0
             ),
-          symbol:
-            symbol0,
+          symbol: symbol0,
         },
+
         {
           address:
             ethers.getAddress(
               event.token1
             ),
-          symbol:
-            symbol1,
+          symbol: symbol1,
         },
       ],
 
@@ -518,9 +493,7 @@ async function processEvents(
 ): Promise<void> {
   let processed = 0;
 
-  for (
-    const event of events
-  ) {
+  for (const event of events) {
     if (
       processed >=
       MAX_PAIRS_PER_RUN
@@ -540,9 +513,7 @@ async function processEvents(
 
     try {
       if (
-        await store.isDuplicate(
-          key
-        )
+        await store.isDuplicate(key)
       ) {
         continue;
       }
@@ -658,4 +629,3 @@ export async function handleCron(
     }
   }
 }
-```
