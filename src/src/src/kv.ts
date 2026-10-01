@@ -34,16 +34,17 @@ async function withRetries<T>(
 ): Promise<T> {
   try {
     return await operation();
-  } catch (firstError) {
+  } catch {
     await sleep(100);
-
-    try {
-      return await operation();
-    } catch (secondError) {
-      await sleep(500);
-      throw secondError;
-    }
   }
+
+  try {
+    return await operation();
+  } catch {
+    await sleep(500);
+  }
+
+  return operation();
 }
 
 export class KVStoreImpl implements KVStore {
