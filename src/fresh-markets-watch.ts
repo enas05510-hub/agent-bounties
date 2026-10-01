@@ -1,3 +1,4 @@
+```ts
 import { Hono } from "hono";
 import {
   paymentMiddleware,
@@ -48,18 +49,12 @@ const DEFAULT_WINDOW_MINUTES = 5;
 const MAX_WINDOW_MINUTES = 10;
 const HEALTH_KEY = "health:status";
 
-function normalizeAddress(
-  address: string
-): string {
+function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
-function getFactories(
-  chain: ChainName
-): string[] {
-  return FACTORIES[chain].map(
-    normalizeAddress
-  );
+function getFactories(chain: ChainName): string[] {
+  return FACTORIES[chain].map(normalizeAddress);
 }
 
 function validateFactories(
@@ -77,12 +72,8 @@ function validateFactories(
     return null;
   }
 
-  const allowed = new Set(
-    getFactories(chain)
-  );
-
-  const normalized =
-    factories.map(normalizeAddress);
+  const allowed = new Set(getFactories(chain));
+  const normalized = factories.map(normalizeAddress);
 
   for (const factory of normalized) {
     if (!allowed.has(factory)) {
@@ -90,14 +81,10 @@ function validateFactories(
     }
   }
 
-  return [
-    ...new Set(normalized),
-  ];
+  return [...new Set(normalized)];
 }
 
-function validateWindow(
-  value: unknown
-): number | null {
+function validateWindow(value: unknown): number | null {
   if (value === undefined) {
     return DEFAULT_WINDOW_MINUTES;
   }
@@ -125,8 +112,7 @@ async function getLatestBlock(
   const response = await fetch(rpc, {
     method: "POST",
     headers: {
-      "content-type":
-        "application/json",
+      "content-type": "application/json",
     },
     body: JSON.stringify({
       jsonrpc: "2.0",
@@ -172,9 +158,7 @@ async function getLatestBlock(
 
 async function updateHealth(
   kv: KVNamespaceLike,
-  field:
-    | "last_webhook"
-    | "last_cron"
+  field: "last_webhook" | "last_cron"
 ): Promise<void> {
   const current =
     (await kv.get<{
@@ -195,8 +179,7 @@ async function updateHealth(
     HEALTH_KEY,
     JSON.stringify(current),
     {
-      expirationTtl:
-        60 * 60 * 24 * 7,
+      expirationTtl: 60 * 60 * 24 * 7,
     }
   );
 }
@@ -298,14 +281,6 @@ function createX402Middleware(
   );
 }
 
-/*
- * x402 protection MUST be registered
- * before the protected /scan route.
- *
- * /health and /webhook are not protected
- * because the middleware has no payment
- * configuration for those routes.
- */
 app.use(
   "/scan",
   async (c, next) => {
@@ -387,11 +362,6 @@ app.post(
         error
       );
 
-      /*
-       * Returning 200 prevents Alchemy from
-       * retrying malformed/unsupported events
-       * indefinitely.
-       */
       return new Response(
         "OK",
         {
@@ -421,7 +391,8 @@ app.post(
     }
 
     if (
-      typeof body !== "object" ||
+      typeof body !==
+        "object" ||
       body === null ||
       Array.isArray(body)
     ) {
@@ -435,7 +406,8 @@ app.post(
     }
 
     if (
-      typeof body.chain !== "string" ||
+      typeof body.chain !==
+        "string" ||
       !isSupportedChain(
         body.chain
       )
@@ -449,7 +421,7 @@ app.post(
       );
     }
 
-    const chain =
+    const chain: ChainName =
       body.chain;
 
     const windowMinutes =
@@ -458,7 +430,8 @@ app.post(
       );
 
     if (
-      windowMinutes === null
+      windowMinutes ===
+      null
     ) {
       return c.json(
         {
@@ -525,15 +498,15 @@ app.post(
 
       const newPairs =
         cached.filter(
-          (pair) => {
-            if (
+          (pair: NewPair) => {
+            const pairFactory =
               normalizeAddress(
                 pair.factory
-              ) !== undefined &&
+              );
+
+            if (
               !factorySet.has(
-                normalizeAddress(
-                  pair.factory
-                )
+                pairFactory
               )
             ) {
               return false;
@@ -550,18 +523,18 @@ app.post(
 
       const response:
         ScanResponse = {
-          chain,
-          window_minutes:
-            windowMinutes,
-          from_block:
-            fromBlock,
-          to_block:
-            currentBlock,
-          new_pairs:
-            newPairs,
-          total_found:
-            newPairs.length,
-        };
+        chain,
+        window_minutes:
+          windowMinutes,
+        from_block:
+          fromBlock,
+        to_block:
+          currentBlock,
+        new_pairs:
+          newPairs,
+        total_found:
+          newPairs.length,
+      };
 
       return c.json(
         response,
@@ -613,3 +586,4 @@ export default {
     );
   },
 };
+```
