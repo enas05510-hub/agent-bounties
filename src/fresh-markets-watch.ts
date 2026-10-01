@@ -38,35 +38,24 @@ import {
 
 interface Env {
   PAIRS_KV: KVNamespaceLike;
-
   PAY_TO?: string;
-
   X402_NETWORK?: string;
-
   X402_PRICE?: string;
-
   X402_FACILITATOR_URL?: string;
 }
 
 interface ScanRequest {
   chain?: string;
-
   factories?: string[];
-
   window_minutes?: number;
 }
 
 interface ScanResponse {
   chain: ChainName;
-
   window_minutes: number;
-
   from_block: number;
-
   to_block: number;
-
   new_pairs: NewPair[];
-
   total_found: number;
 }
 
@@ -76,11 +65,8 @@ const app =
   }>();
 
 const DEFAULT_WINDOW_MINUTES = 5;
-
 const MAX_WINDOW_MINUTES = 10;
-
-const HEALTH_KEY =
-  "health:status";
+const HEALTH_KEY = "health:status";
 
 const X402_DEFAULT_NETWORK =
   "eip155:84532";
@@ -181,20 +167,15 @@ async function getLatestBlock(
       rpc,
       {
         method: "POST",
-
         headers: {
           "content-type":
             "application/json",
         },
-
         body: JSON.stringify({
           jsonrpc: "2.0",
-
           id: 1,
-
           method:
             "eth_blockNumber",
-
           params: [],
         }),
       }
@@ -248,7 +229,6 @@ async function updateHealth(
     (await kv.get<{
       last_webhook:
         string | null;
-
       last_cron:
         string | null;
     }>(
@@ -256,7 +236,6 @@ async function updateHealth(
       "json"
     )) ?? {
       last_webhook: null,
-
       last_cron: null,
     };
 
@@ -265,11 +244,9 @@ async function updateHealth(
 
   await kv.put(
     HEALTH_KEY,
-
     JSON.stringify(
       current
     ),
-
     {
       expirationTtl:
         60 * 60 * 24 * 7,
@@ -282,17 +259,14 @@ async function getHealth(
 ): Promise<{
   last_webhook:
     string | null;
-
   last_cron:
     string | null;
-
   pairs_cached: number;
 }> {
   const status =
     (await kv.get<{
       last_webhook:
         string | null;
-
       last_cron:
         string | null;
     }>(
@@ -300,7 +274,6 @@ async function getHealth(
       "json"
     )) ?? {
       last_webhook: null,
-
       last_cron: null,
     };
 
@@ -314,7 +287,6 @@ async function getHealth(
     store.listByChain(
       "ethereum"
     ),
-
     store.listByChain(
       "bsc"
     ),
@@ -323,10 +295,8 @@ async function getHealth(
   return {
     last_webhook:
       status.last_webhook,
-
     last_cron:
       status.last_cron,
-
     pairs_cached:
       ethereumPairs.length +
       bscPairs.length,
@@ -345,10 +315,10 @@ function createX402Middleware(
     );
   }
 
-const network =
+  const network =
     (env.X402_NETWORK ??
       X402_DEFAULT_NETWORK) as `${string}:${string}`;
-  
+
   const price =
     env.X402_PRICE ??
     X402_DEFAULT_PRICE;
@@ -376,26 +346,19 @@ const network =
         accepts: [
           {
             scheme: "exact",
-
             price,
-
             network,
-
             payTo,
-
             maxTimeoutSeconds:
               60,
           },
         ],
-
         description:
           "Scan recently created AMM pairs",
-
         mimeType:
           "application/json",
       },
     },
-
     resourceServer
   );
 }
@@ -411,7 +374,6 @@ app.get(
 
       return c.json({
         status: "ok",
-
         ...health,
       });
     } catch (error) {
@@ -425,7 +387,6 @@ app.get(
           status:
             "error",
         },
-
         500
       );
     }
@@ -464,19 +425,8 @@ app.post(
   }
 );
 
-/*
- * IMPORTANT:
- *
- * x402 is attached directly to the POST /scan
- * route instead of using app.use("/scan", ...).
- *
- * This guarantees that the payment middleware
- * and the actual scan handler participate in the
- * same Hono route chain.
- */
 app.post(
   "/scan",
-
   async (c, next) => {
     try {
       const middleware =
@@ -499,12 +449,10 @@ app.post(
           error:
             "Payment service is not configured",
         },
-
         500
       );
     }
   },
-
   async (c) => {
     let body:
       ScanRequest;
@@ -519,7 +467,6 @@ app.post(
           error:
             "Invalid JSON body",
         },
-
         400
       );
     }
@@ -535,7 +482,6 @@ app.post(
           error:
             "Request body must be an object",
         },
-
         400
       );
     }
@@ -552,7 +498,6 @@ app.post(
           error:
             'chain must be "ethereum" or "bsc"',
         },
-
         400
       );
     }
@@ -575,7 +520,6 @@ app.post(
           error:
             "window_minutes must be an integer between 1 and 10",
         },
-
         400
       );
     }
@@ -594,7 +538,6 @@ app.post(
           error:
             "factories contains an unsupported factory address",
         },
-
         400
       );
     }
@@ -614,7 +557,6 @@ app.post(
       const fromBlock =
         Math.max(
           0,
-
           currentBlock -
             windowMinutes *
               blocksPerMinute
@@ -651,10 +593,8 @@ app.post(
               factorySet.has(
                 pairFactory
               ) &&
-
               pair.block_number >=
                 fromBlock &&
-
               pair.block_number <=
                 currentBlock
             );
@@ -664,19 +604,14 @@ app.post(
       const response:
         ScanResponse = {
         chain,
-
         window_minutes:
           windowMinutes,
-
         from_block:
           fromBlock,
-
         to_block:
           currentBlock,
-
         new_pairs:
           newPairs,
-
         total_found:
           newPairs.length,
       };
@@ -696,7 +631,6 @@ app.post(
           error:
             "Scan failed",
         },
-
         500
       );
     }
@@ -710,10 +644,8 @@ export default {
   async scheduled(
     _event:
       ScheduledEvent,
-
     env:
       Env,
-
     ctx:
       ExecutionContext
   ): Promise<void> {
