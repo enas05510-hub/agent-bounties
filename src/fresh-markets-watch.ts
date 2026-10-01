@@ -49,29 +49,14 @@ const app = new Hono<{ Bindings: Env }>();
 
 const DEFAULT_WINDOW_MINUTES = 5;
 const MAX_WINDOW_MINUTES = 10;
-
 const HEALTH_KEY = "health:status";
 
-/*
- * x402 requires a CAIP-2 network identifier.
- * Keep this as a literal so TypeScript does not
- * widen it to a generic string.
- */
-const X402_NETWORK: `${string}:${string}` =
-  "eip155:84532";
-
-function normalizeAddress(
-  address: string
-): string {
+function normalizeAddress(address: string): string {
   return address.toLowerCase();
 }
 
-function getFactories(
-  chain: ChainName
-): string[] {
-  return FACTORIES[chain].map(
-    normalizeAddress
-  );
+function getFactories(chain: ChainName): string[] {
+  return FACTORIES[chain].map(normalizeAddress);
 }
 
 function validateFactories(
@@ -89,34 +74,19 @@ function validateFactories(
     return null;
   }
 
-  const allowed =
-    new Set(
-      getFactories(chain)
-    );
+  const allowed = new Set(getFactories(chain));
+  const normalized = factories.map(normalizeAddress);
 
-  const normalized =
-    factories.map(
-      normalizeAddress
-    );
-
-  for (
-    const factory of normalized
-  ) {
-    if (
-      !allowed.has(factory)
-    ) {
+  for (const factory of normalized) {
+    if (!allowed.has(factory)) {
       return null;
     }
   }
 
-  return [
-    ...new Set(normalized),
-  ];
+  return [...new Set(normalized)];
 }
 
-function validateWindow(
-  value: unknown
-): number | null {
+function validateWindow(value: unknown): number | null {
   if (value === undefined) {
     return DEFAULT_WINDOW_MINUTES;
   }
@@ -141,24 +111,18 @@ async function getLatestBlock(
       ? "https://eth.llamarpc.com"
       : "https://bsc-dataseed.binance.org";
 
-  const response =
-    await fetch(
-      rpc,
-      {
-        method: "POST",
-        headers: {
-          "content-type":
-            "application/json",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method:
-            "eth_blockNumber",
-          params: [],
-        }),
-      }
-    );
+  const response = await fetch(rpc, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "eth_blockNumber",
+      params: [],
+    }),
+  });
 
   if (!response.ok) {
     throw new Error(
@@ -166,29 +130,23 @@ async function getLatestBlock(
     );
   }
 
-  const body =
-    (await response.json()) as {
-      result?: string;
-      error?: unknown;
-    };
+  const body = (await response.json()) as {
+    result?: string;
+    error?: unknown;
+  };
 
   if (
     body.error ||
-    typeof body.result !==
-      "string"
+    typeof body.result !== "string"
   ) {
     throw new Error(
       "RPC did not return a valid block number"
     );
   }
 
-  const block = Number(
-    BigInt(body.result)
-  );
+  const block = Number(BigInt(body.result));
 
-  if (
-    !Number.isSafeInteger(block)
-  ) {
+  if (!Number.isSafeInteger(block)) {
     throw new Error(
       "RPC returned an unsafe block number"
     );
@@ -199,35 +157,24 @@ async function getLatestBlock(
 
 async function updateHealth(
   kv: KVNamespaceLike,
-  field:
-    | "last_webhook"
-    | "last_cron"
+  field: "last_webhook" | "last_cron"
 ): Promise<void> {
   const current =
     (await kv.get<{
-      last_webhook:
-        | string
-        | null;
-      last_cron:
-        | string
-        | null;
-    }>(
-      HEALTH_KEY,
-      "json"
-    )) ?? {
+      last_webhook: string | null;
+      last_cron: string | null;
+    }>(HEALTH_KEY, "json")) ?? {
       last_webhook: null,
       last_cron: null,
     };
 
-  current[field] =
-    new Date().toISOString();
+  current[field] = new Date().toISOString();
 
   await kv.put(
     HEALTH_KEY,
     JSON.stringify(current),
     {
-      expirationTtl:
-        60 * 60 * 24 * 7,
+      expirationTtl: 60 * 60 * 24 * 7,
     }
   );
 }
@@ -235,52 +182,32 @@ async function updateHealth(
 async function getHealth(
   kv: KVNamespaceLike
 ): Promise<{
-  last_webhook:
-    | string
-    | null;
-  last_cron:
-    | string
-    | null;
+  last_webhook: string | null;
+  last_cron: string | null;
   pairs_cached: number;
 }> {
   const status =
     (await kv.get<{
-      last_webhook:
-        | string
-        | null;
-      last_cron:
-        | string
-        | null;
-    }>(
-      HEALTH_KEY,
-      "json"
-    )) ?? {
+      last_webhook: string | null;
+      last_cron: string | null;
+    }>(HEALTH_KEY, "json")) ?? {
       last_webhook: null,
       last_cron: null,
     };
 
-  const store =
-    new KVStoreImpl(kv);
+  const store = new KVStoreImpl(kv);
 
   const [
     ethereumPairs,
     bscPairs,
   ] = await Promise.all([
-    store.listByChain(
-      "ethereum"
-    ),
-    store.listByChain(
-      "bsc"
-    ),
+    store.listByChain("ethereum"),
+    store.listByChain("bsc"),
   ]);
 
   return {
-    last_webhook:
-      status.last_webhook,
-
-    last_cron:
-      status.last_cron,
-
+    last_webhook: status.last_webhook,
+    last_cron: status.last_cron,
     pairs_cached:
       ethereumPairs.length +
       bscPairs.length,
@@ -297,8 +224,7 @@ function createX402Middleware(
   }
 
   const price =
-    env.X402_PRICE ??
-    "$0.01";
+    env.X402_PRICE ?? "$0.01";
 
   const facilitator =
     new HTTPFacilitatorClient({
@@ -312,8 +238,14 @@ function createX402Middleware(
       facilitator
     );
 
+  /*
+   * Deliberately use the literal here.
+   * This prevents Cloudflare's generated
+   * environment type from widening the value
+   * to plain string.
+   */
   resourceServer.register(
-    X402_NETWORK,
+    "eip155:84532",
     new ExactEvmScheme()
   );
 
@@ -324,16 +256,13 @@ function createX402Middleware(
           {
             scheme: "exact",
             price,
-            network:
-              X402_NETWORK,
+            network: "eip155:84532",
             payTo: env.PAY_TO,
             maxTimeoutSeconds: 60,
           },
         ],
-
         description:
           "Scan recently created AMM pairs",
-
         mimeType:
           "application/json",
       },
@@ -347,14 +276,9 @@ app.use(
   async (c, next) => {
     try {
       const middleware =
-        createX402Middleware(
-          c.env
-        );
+        createX402Middleware(c.env);
 
-      return middleware(
-        c,
-        next
-      );
+      return middleware(c, next);
     } catch (error) {
       console.warn(
         "x402 configuration error:",
@@ -423,12 +347,9 @@ app.post(
         error
       );
 
-      return new Response(
-        "OK",
-        {
-          status: 200,
-        }
-      );
+      return new Response("OK", {
+        status: 200,
+      });
     }
   }
 );
@@ -452,8 +373,7 @@ app.post(
     }
 
     if (
-      typeof body !==
-        "object" ||
+      typeof body !== "object" ||
       body === null ||
       Array.isArray(body)
     ) {
@@ -467,11 +387,8 @@ app.post(
     }
 
     if (
-      typeof body.chain !==
-        "string" ||
-      !isSupportedChain(
-        body.chain
-      )
+      typeof body.chain !== "string" ||
+      !isSupportedChain(body.chain)
     ) {
       return c.json(
         {
@@ -490,10 +407,7 @@ app.post(
         body.window_minutes
       );
 
-    if (
-      windowMinutes ===
-      null
-    ) {
+    if (windowMinutes === null) {
       return c.json(
         {
           error:
@@ -509,9 +423,7 @@ app.post(
         body.factories
       );
 
-    if (
-      factories === null
-    ) {
+    if (factories === null) {
       return c.json(
         {
           error:
@@ -523,9 +435,7 @@ app.post(
 
     try {
       const currentBlock =
-        await getLatestBlock(
-          chain
-        );
+        await getLatestBlock(chain);
 
       const blocksPerMinute =
         chain === "ethereum"
@@ -559,23 +469,16 @@ app.post(
 
       const newPairs =
         cached.filter(
-          (
-            pair: NewPair
-          ) => {
+          (pair: NewPair) => {
             const pairFactory =
               normalizeAddress(
                 pair.factory
               );
 
-            if (
-              !factorySet.has(
-                pairFactory
-              )
-            ) {
-              return false;
-            }
-
             return (
+              factorySet.has(
+                pairFactory
+              ) &&
               pair.block_number >=
                 fromBlock &&
               pair.block_number <=
@@ -611,8 +514,7 @@ app.post(
 
       return c.json(
         {
-          error:
-            "Scan failed",
+          error: "Scan failed",
         },
         500
       );
