@@ -10,7 +10,7 @@ import {
 } from "@x402/core/server";
 
 import {
-  ExactEvmScheme,
+  registerExactEvmScheme,
 } from "@x402/evm/exact/server";
 
 import {
@@ -69,7 +69,7 @@ const MAX_WINDOW_MINUTES = 10;
 const HEALTH_KEY = "health:status";
 
 const X402_NETWORK =
-  "eip155:84532" as const;
+  "eip155:84532";
 
 const X402_DEFAULT_PRICE =
   "$0.01";
@@ -331,9 +331,8 @@ function createX402Middleware(
       facilitator
     );
 
-  resourceServer.register(
-    X402_NETWORK,
-    new ExactEvmScheme()
+  registerExactEvmScheme(
+    resourceServer
   );
 
   return paymentMiddleware(
