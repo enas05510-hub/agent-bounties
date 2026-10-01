@@ -68,8 +68,8 @@ const DEFAULT_WINDOW_MINUTES = 5;
 const MAX_WINDOW_MINUTES = 10;
 const HEALTH_KEY = "health:status";
 
-const X402_DEFAULT_NETWORK =
-  "eip155:84532";
+const X402_NETWORK =
+  "eip155:84532" as const;
 
 const X402_DEFAULT_PRICE =
   "$0.01";
@@ -315,10 +315,6 @@ function createX402Middleware(
     );
   }
 
-  const network =
-    (env.X402_NETWORK ??
-      X402_DEFAULT_NETWORK) as `${string}:${string}`;
-
   const price =
     env.X402_PRICE ??
     X402_DEFAULT_PRICE;
@@ -336,7 +332,7 @@ function createX402Middleware(
     );
 
   resourceServer.register(
-    network,
+    X402_NETWORK,
     new ExactEvmScheme()
   );
 
@@ -347,7 +343,8 @@ function createX402Middleware(
           {
             scheme: "exact",
             price,
-            network,
+            network:
+              X402_NETWORK,
             payTo,
             maxTimeoutSeconds:
               60,
