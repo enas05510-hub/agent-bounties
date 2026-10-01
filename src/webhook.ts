@@ -1,19 +1,40 @@
 import { ethers } from "ethers";
+
 import { CHAINS } from "./chains";
-import { ChainName, NewPair } from "./types";
+
+import {
+  ChainName,
+  NewPair,
+} from "./types";
+
 import {
   KVNamespaceLike,
   KVStoreImpl,
 } from "./kv";
-import { extractInitialHolders } from "./holders";
 
-const PAIR_CREATED_TOPIC = ethers.id(
-  "PairCreated(address,address,address,uint256)"
-);
+import {
+  extractInitialHolders,
+} from "./holders";
 
-const POOL_CREATED_TOPIC = ethers.id(
-  "PoolCreated(address,address,uint24,int24,address)"
-);
+const V2_FACTORY_INTERFACE =
+  new ethers.Interface([
+    "event PairCreated(address indexed token0,address indexed token1,address pair,uint256)",
+  ]);
+
+const V3_FACTORY_INTERFACE =
+  new ethers.Interface([
+    "event PoolCreated(address indexed token0,address indexed token1,uint24 indexed fee,int24 tickSpacing,address pool)",
+  ]);
+
+const PAIR_CREATED_TOPIC =
+  ethers.id(
+    "PairCreated(address,address,address,uint256)"
+  );
+
+const POOL_CREATED_TOPIC =
+  ethers.id(
+    "PoolCreated(address,address,uint24,int24,address)"
+  );
 
 interface AlchemyLog {
   address?: string;
@@ -25,9 +46,11 @@ interface AlchemyEvent {
   transaction?: {
     hash?: string;
   };
+
   block?: {
     number?: string | number;
   };
+
   data?: {
     logs?: AlchemyLog[];
   };
@@ -38,7 +61,9 @@ interface AlchemyWebhookPayload {
   id?: string;
   createdAt?: string;
   type?: string;
+
   event?: AlchemyEvent;
+
   blockchain?: {
     network?: string;
   };
@@ -57,15 +82,8 @@ interface PairEvent {
 function normalizeAddress(
   address: string
 ): string {
-  return ethers.getAddress(address);
-}
-
-function topicToAddress(
-  topic: string
-): string {
-  return normalizeAddress(
-    `0x${topic.slice(-40)}`
-  );
+  return ethers
+    .getAddress(address);
 }
 
 function detectChain(
@@ -98,33 +116,37 @@ function getFactoryType(
   isV3: boolean;
   normalized: string;
 } | null {
-  const normalized =
-    normalizeAddress(factory);
+  try {
+    const normalized =
+      normalizeAddress(factory);
 
-  const factories =
-    CHAINS[chain].factories;
+    const factories =
+      CHAINS[chain].factories;
 
-  if (
-    normalized.toLowerCase() ===
-    factories[0].toLowerCase()
-  ) {
-    return {
-      isV3: false,
-      normalized,
-    };
+    if (
+      normalized.toLowerCase() ===
+      factories[0].toLowerCase()
+    ) {
+      return {
+        isV3: false,
+        normalized,
+      };
+    }
+
+    if (
+      normalized.toLowerCase() ===
+      factories[1].toLowerCase()
+    ) {
+      return {
+        isV3: true,
+        normalized,
+      };
+    }
+
+    return null;
+  } catch {
+    return null;
   }
-
-  if (
-    normalized.toLowerCase() ===
-    factories[1].toLowerCase()
-  ) {
-    return {
-      isV3: true,
-      normalized,
-    };
-  }
-
-  return null;
 }
 
 function parsePairEvent(
@@ -136,7 +158,7 @@ function parsePairEvent(
   if (
     !log.address ||
     !log.topics ||
-    log.topics.length < 3
+    log.topics.length === 0
   ) {
     return null;
   }
@@ -169,79 +191,63 @@ function parsePairEvent(
       return null;
     }
 
+    const iface =
+      factoryInfo.isV3
+        ? V3_FACTORY_INTERFACE
+        : V2_FACTORY_INTERFACE;
+
+    const parsed =
+      iface.parseLog({
+        topics: log.topics,
+        data: log.data ?? "0x",
+      });
+
+    if (!parsed) {
+      return null;
+    }
+
     const token0 =
-      topicToAddress(
-        log.topics[1]
+      normalizeAddress(
+        String(parsed.args[0])
       );
 
     const token1 =
-      topicToAddress(
-        log.topics[2]
+      normalizeAddress(
+        String(parsed.args[1])
       );
 
-    let pairAddress: string;
-
-    if (!factoryInfo.isV3) {
-      /*
-       * Uniswap/Pancake V2:
-       * PairCreated(
-       *   address indexed token0,
-       *   address indexed token1,
-       *   address indexed pair,
-       *   uint256
-       * )
-       */
-      if (log.topics.length < 4) {
-        return null;
-      }
-
-      pairAddress =
-        topicToAddress(
-          log.topics[3]
-        );
-    } else {
-      /*
-       * Uniswap/Pancake V3:
-       * PoolCreated(
-       *   address indexed token0,
-       *   address indexed token1,
-       *   uint24 indexed fee,
-       *   int24 indexed tickSpacing,
-       *   address pool
-       * )
-       *
-       * The pool address is non-indexed
-       * and therefore lives in data.
-       */
-      if (!log.data) {
-        return null;
-      }
-
-      const decoded =
-        ethers.AbiCoder
-          .defaultAbiCoder()
-          .decode(
-            [
-              "address",
-              "uint24",
-              "int24",
-              "address",
-            ],
-            log.data
+    const pairAddress =
+      factoryInfo.isV3
+        ? normalizeAddress(
+            String(parsed.args[4])
+          )
+        : normalizeAddress(
+            String(parsed.args[2])
           );
 
-      pairAddress =
-        normalizeAddress(
-          decoded[3]
-        );
+    if (
+      pairAddress ===
+      ethers.ZeroAddress
+    ) {
+      return null;
+    }
+
+    if (
+      token0 === ethers.ZeroAddress ||
+      token1 === ethers.ZeroAddress
+    ) {
+      return null;
     }
 
     return {
       token0,
       token1,
-      pair_address: pairAddress,
-      tx_hash: txHash,
-      block_number: blockNumber,
+      pair_address:
+        pairAddress,
+      tx_hash:
+        txHash,
+      block_number:
+        blockNumber,
       factory:
         factoryInfo.normalized,
       isV3:
@@ -271,10 +277,9 @@ async function getTokenSymbol(
         provider
       );
 
-    const symbol =
-      await contract.symbol();
-
-    return String(symbol);
+    return String(
+      await contract.symbol()
+    );
   } catch {
     return "UNKNOWN";
   }
@@ -303,6 +308,7 @@ async function getV2Reserves(
     return {
       token0_raw:
         reserves[0].toString(),
+
       token1_raw:
         reserves[1].toString(),
     };
@@ -322,14 +328,6 @@ async function getInitialLiquidity(
   token0_raw: string;
   token1_raw: string;
 }> {
-  /*
-   * V2 pairs expose getReserves().
-   *
-   * V3 pools use concentrated liquidity and do
-   * not expose the V2 reserve interface. We keep
-   * the raw fields present and use zero until a
-   * V3-specific liquidity reader is added.
-   */
   if (isV3) {
     return {
       token0_raw: "0",
@@ -348,99 +346,140 @@ async function buildNewPair(
   event: PairEvent,
   provider: ethers.JsonRpcProvider
 ): Promise<NewPair | null> {
-  const receipt =
-    await provider.getTransactionReceipt(
-      event.tx_hash
-    );
+  try {
+    const receipt =
+      await provider.getTransactionReceipt(
+        event.tx_hash
+      );
 
-  if (
-    !receipt ||
-    receipt.status !== 1
-  ) {
-    return null;
-  }
+    if (
+      !receipt ||
+      receipt.status !== 1
+    ) {
+      return null;
+    }
 
-  const code =
-    await provider.getCode(
-      event.pair_address
-    );
+    const code =
+      await provider.getCode(
+        event.pair_address
+      );
 
-  if (
-    !code ||
-    code === "0x"
-  ) {
-    return null;
-  }
+    if (
+      !code ||
+      code === "0x"
+    ) {
+      return null;
+    }
 
-  const [
-    symbol0,
-    symbol1,
-    liquidity,
-    holders,
-  ] = await Promise.all([
-    getTokenSymbol(
-      provider,
-      event.token0
-    ),
-    getTokenSymbol(
-      provider,
-      event.token1
-    ),
-    getInitialLiquidity(
-      provider,
-      event.pair_address,
-      event.isV3
-    ),
-    extractInitialHolders({
+    const [
+      symbol0,
+      symbol1,
+      liquidity,
+      holders,
+      block,
+    ] = await Promise.all([
+      getTokenSymbol(
+        provider,
+        event.token0
+      ),
+
+      getTokenSymbol(
+        provider,
+        event.token1
+      ),
+
+      getInitialLiquidity(
+        provider,
+        event.pair_address,
+        event.isV3
+      ),
+
+      extractInitialHolders({
+        tx_hash:
+          event.tx_hash,
+
+        chain,
+
+        pair_address:
+          event.pair_address,
+
+        token0:
+          event.token0,
+
+        token1:
+          event.token1,
+      }),
+
+      provider.getBlock(
+        event.block_number
+      ),
+    ]);
+
+    const createdAt =
+      block
+        ? new Date(
+            Number(
+              block.timestamp
+            ) * 1000
+          ).toISOString()
+        : new Date().toISOString();
+
+    return {
+      pair_address:
+        normalizeAddress(
+          event.pair_address
+        ),
+
+      factory:
+        normalizeAddress(
+          event.factory
+        ),
+
+      tokens: [
+        {
+          address:
+            normalizeAddress(
+              event.token0
+            ),
+
+          symbol:
+            symbol0,
+        },
+
+        {
+          address:
+            normalizeAddress(
+              event.token1
+            ),
+
+          symbol:
+            symbol1,
+        },
+      ],
+
+      init_liquidity:
+        liquidity,
+
+      top_holders:
+        holders,
+
+      created_at:
+        createdAt,
+
+      block_number:
+        event.block_number,
+
       tx_hash:
         event.tx_hash,
-      chain,
-      pair_address:
-        event.pair_address,
-      token0:
-        event.token0,
-      token1:
-        event.token1,
-    }),
-  ]);
+    };
+  } catch (error) {
+    console.warn(
+      `Failed to build pair ${event.pair_address}:`,
+      error
+    );
 
-  return {
-    pair_address:
-      event.pair_address,
-
-    factory:
-      event.factory,
-
-    tokens: [
-      {
-        address:
-          event.token0,
-        symbol:
-          symbol0,
-      },
-      {
-        address:
-          event.token1,
-        symbol:
-          symbol1,
-      },
-    ],
-
-    init_liquidity:
-      liquidity,
-
-    top_holders:
-      holders,
-
-    created_at:
-      new Date().toISOString(),
-
-    block_number:
-      event.block_number,
-
-    tx_hash:
-      event.tx_hash,
-  };
+    return null;
+  }
 }
 
 export async function handleWebhook(
@@ -501,7 +540,7 @@ export async function handleWebhook(
         ? Number(rawBlock)
         : typeof rawBlock === "number"
           ? rawBlock
-          : 0;
+          : NaN;
 
     if (
       !Number.isSafeInteger(
@@ -570,7 +609,7 @@ export async function handleWebhook(
           );
 
         const key =
-          `pair:${chain}:${pairAddress}`;
+          `pair:${chain}:${pairAddress.toLowerCase()}`;
 
         if (
           await store.isDuplicate(
@@ -585,6 +624,7 @@ export async function handleWebhook(
             chain,
             {
               ...pairEvent,
+
               pair_address:
                 pairAddress,
             },
@@ -617,6 +657,12 @@ export async function handleWebhook(
       error
     );
 
+    /*
+     * Return 200 so the webhook provider does not
+     * continuously retry malformed/unsupported
+     * events. Individual processing failures are
+     * isolated above.
+     */
     return new Response(
       "OK",
       { status: 200 }
