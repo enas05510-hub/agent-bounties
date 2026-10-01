@@ -8,9 +8,11 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@x402/core": "^2.28.0",
+    "@x402/evm": "^2.28.0",
+    "@x402/hono": "^2.28.0",
     "ethers": "^6.15.0",
-    "hono": "^4.13.9",
-    "x402-hono": "^0.6.0"
+    "hono": "^4.13.10"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260918.0",
