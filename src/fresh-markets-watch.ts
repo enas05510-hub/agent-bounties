@@ -345,10 +345,10 @@ function createX402Middleware(
     );
   }
 
-  const network =
-    env.X402_NETWORK ??
-    X402_DEFAULT_NETWORK;
-
+const network =
+    (env.X402_NETWORK ??
+      X402_DEFAULT_NETWORK) as `${string}:${string}`;
+  
   const price =
     env.X402_PRICE ??
     X402_DEFAULT_PRICE;
