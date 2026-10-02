@@ -47,8 +47,17 @@ async function withRetries<T>(
   return operation();
 }
 
+export function pairKey(
+  chain: ChainName,
+  pairAddress: string
+): string {
+  return `pair:${chain}:${pairAddress.toLowerCase()}`;
+}
+
 export class KVStoreImpl implements KVStore {
-  constructor(private readonly kv: KVNamespaceLike) {}
+  constructor(
+    private readonly kv: KVNamespaceLike
+  ) {}
 
   async write(
     key: string,
@@ -56,35 +65,67 @@ export class KVStoreImpl implements KVStore {
     ttlSeconds: number = DEFAULT_KV_TTL_SECONDS
   ): Promise<void> {
     await withRetries(() =>
-      this.kv.put(key, JSON.stringify(value), {
-        expirationTtl: ttlSeconds,
-      })
+      this.kv.put(
+        key,
+        JSON.stringify(value),
+        {
+          expirationTtl: ttlSeconds,
+        }
+      )
     );
   }
 
-  async read<T = unknown>(key: string): Promise<T | null> {
-    return this.kv.get<T>(key, "json");
+  async read<T = unknown>(
+    key: string
+  ): Promise<T | null> {
+    return this.kv.get<T>(
+      key,
+      "json"
+    );
   }
 
-  async listByChain(chain: ChainName): Promise<NewPair[]> {
-    const prefix = `pair:${chain}:`;
-    const result = await this.kv.list({ prefix });
+  async listByChain(
+    chain: ChainName
+  ): Promise<NewPair[]> {
+    const prefix =
+      `pair:${chain}:`;
+
+    const result =
+      await this.kv.list({
+        prefix,
+      });
 
     const pairs: NewPair[] = [];
 
-    for (const key of result.keys) {
-      const pair = await this.read<NewPair>(key.name);
+    for (
+      const key of result.keys
+    ) {
+      try {
+        const pair =
+          await this.read<NewPair>(
+            key.name
+          );
 
-      if (pair) {
-        pairs.push(pair);
+        if (pair) {
+          pairs.push(pair);
+        }
+      } catch {
+        // Ignore malformed individual KV entries.
       }
     }
 
     return pairs;
   }
 
-  async isDuplicate(key: string): Promise<boolean> {
-    const value = await this.kv.get(key, "text");
+  async isDuplicate(
+    key: string
+  ): Promise<boolean> {
+    const value =
+      await this.kv.get(
+        key,
+        "text"
+      );
+
     return value !== null;
   }
 }
