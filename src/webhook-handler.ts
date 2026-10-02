@@ -49,10 +49,9 @@ type WebhookPayload = {
     logs?: WebhookLog[];
   };
 };
-
-type Env = {
+interface Env {
   PAIRS_KV: KVNamespace;
-};
+}
 
 const RPCS: Record<string, string> = {
   ethereum:
