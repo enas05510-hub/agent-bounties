@@ -1,3 +1,4 @@
+```ts
 import { ethers } from "ethers";
 
 import { CHAINS } from "./chains";
@@ -40,19 +41,24 @@ interface AlchemyLog {
   address?: string;
   topics?: string[];
   data?: string;
-}
 
-interface AlchemyEvent {
   transaction?: {
     hash?: string;
   };
+}
 
-  block?: {
-    number?: string | number;
+interface AlchemyBlock {
+  number?: string | number;
+  logs?: AlchemyLog[];
+}
+
+interface AlchemyEvent {
+  data?: {
+    block?: AlchemyBlock;
   };
 
-  data?: {
-    logs?: AlchemyLog[];
+  blockchain?: {
+    network?: string;
   };
 }
 
@@ -82,8 +88,7 @@ interface PairEvent {
 function normalizeAddress(
   address: string
 ): string {
-  return ethers
-    .getAddress(address);
+  return ethers.getAddress(address);
 }
 
 function detectChain(
@@ -242,16 +247,11 @@ function parsePairEvent(
     return {
       token0,
       token1,
-      pair_address:
-        pairAddress,
-      tx_hash:
-        txHash,
-      block_number:
-        blockNumber,
-      factory:
-        factoryInfo.normalized,
-      isV3:
-        factoryInfo.isV3,
+      pair_address: pairAddress,
+      tx_hash: txHash,
+      block_number: blockNumber,
+      factory: factoryInfo.normalized,
+      isV3: factoryInfo.isV3,
     };
   } catch (error) {
     console.warn(
@@ -354,318 +354,5 @@ async function buildNewPair(
 
     if (
       !receipt ||
-      receipt.status !== 1
-    ) {
-      return null;
-    }
-
-    const code =
-      await provider.getCode(
-        event.pair_address
-      );
-
-    if (
-      !code ||
-      code === "0x"
-    ) {
-      return null;
-    }
-
-    const [
-      symbol0,
-      symbol1,
-      liquidity,
-      holders,
-      block,
-    ] = await Promise.all([
-      getTokenSymbol(
-        provider,
-        event.token0
-      ),
-
-      getTokenSymbol(
-        provider,
-        event.token1
-      ),
-
-      getInitialLiquidity(
-        provider,
-        event.pair_address,
-        event.isV3
-      ),
-
-      extractInitialHolders({
-        tx_hash:
-          event.tx_hash,
-
-        chain,
-
-        pair_address:
-          event.pair_address,
-
-        token0:
-          event.token0,
-
-        token1:
-          event.token1,
-      }),
-
-      provider.getBlock(
-        event.block_number
-      ),
-    ]);
-
-    const createdAt =
-      block
-        ? new Date(
-            Number(
-              block.timestamp
-            ) * 1000
-          ).toISOString()
-        : new Date().toISOString();
-
-    return {
-      pair_address:
-        normalizeAddress(
-          event.pair_address
-        ),
-
-      factory:
-        normalizeAddress(
-          event.factory
-        ),
-
-      tokens: [
-        {
-          address:
-            normalizeAddress(
-              event.token0
-            ),
-
-          symbol:
-            symbol0,
-        },
-
-        {
-          address:
-            normalizeAddress(
-              event.token1
-            ),
-
-          symbol:
-            symbol1,
-        },
-      ],
-
-      init_liquidity:
-        liquidity,
-
-      top_holders:
-        holders,
-
-      created_at:
-        createdAt,
-
-      block_number:
-        event.block_number,
-
-      tx_hash:
-        event.tx_hash,
-    };
-  } catch (error) {
-    console.warn(
-      `Failed to build pair ${event.pair_address}:`,
-      error
-    );
-
-    return null;
-  }
-}
-
-export async function handleWebhook(
-  request: Request,
-  kvNamespace: KVNamespaceLike
-): Promise<Response> {
-  try {
-    if (
-      request.method !== "POST"
-    ) {
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const payload =
-      (await request.json()) as
-        AlchemyWebhookPayload;
-
-    const chain =
-      detectChain(
-        payload.blockchain?.network
-      );
-
-    if (!chain) {
-      console.warn(
-        "Unsupported blockchain network"
-      );
-
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const txHash =
-      payload.event
-        ?.transaction?.hash;
-
-    if (!txHash) {
-      console.warn(
-        "Webhook missing transaction hash"
-      );
-
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const rawBlock =
-      payload.event
-        ?.block?.number;
-
-    const blockNumber =
-      typeof rawBlock === "string"
-        ? Number(rawBlock)
-        : typeof rawBlock === "number"
-          ? rawBlock
-          : NaN;
-
-    if (
-      !Number.isSafeInteger(
-        blockNumber
-      ) ||
-      blockNumber < 0
-    ) {
-      console.warn(
-        "Webhook contains invalid block number"
-      );
-
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const logs =
-      payload.event
-        ?.data?.logs ?? [];
-
-    const pairEvents =
-      logs
-        .map((log) =>
-          parsePairEvent(
-            chain,
-            log,
-            txHash,
-            blockNumber
-          )
-        )
-        .filter(
-          (
-            event
-          ): event is PairEvent =>
-            event !== null
-        );
-
-    if (
-      pairEvents.length === 0
-    ) {
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const provider =
-      new ethers.JsonRpcProvider(
-        CHAINS[chain].rpc_url
-      );
-
-    const store =
-      new KVStoreImpl(
-        kvNamespace
-      );
-
-    for (
-      const pairEvent of
-      pairEvents
-    ) {
-      try {
-        const pairAddress =
-          normalizeAddress(
-            pairEvent.pair_address
-          );
-
-        const key =
-          `pair:${chain}:${pairAddress.toLowerCase()}`;
-
-        if (
-          await store.isDuplicate(
-            key
-          )
-        ) {
-          continue;
-        }
-
-        const pair =
-          await buildNewPair(
-            chain,
-            {
-              ...pairEvent,
-
-              pair_address:
-                pairAddress,
-            },
-            provider
-          );
-
-        if (!pair) {
-          continue;
-        }
-
-        await store.write(
-          key,
-          pair
-        );
-      } catch (error) {
-        console.warn(
-          `Failed to process pair ${pairEvent.pair_address}:`,
-          error
-        );
-      }
-    }
-
-    return new Response(
-      "OK",
-      { status: 200 }
-    );
-  } catch (error) {
-    console.warn(
-      "Webhook processing error:",
-      error
-    );
-
-    /*
-     * Return 200 so the webhook provider does not
-     * continuously retry malformed/unsupported
-     * events. Individual processing failures are
-     * isolated above.
-     */
-    return new Response(
-      "OK",
-      { status: 200 }
-    );
-  }
-}
+      rece
+```
