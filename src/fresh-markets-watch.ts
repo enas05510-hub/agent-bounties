@@ -1,10 +1,17 @@
 import { Hono } from "hono";
+
 import {
   paymentMiddleware,
   x402ResourceServer,
 } from "@x402/hono";
-import { HTTPFacilitatorClient } from "@x402/core/server";
-import { ExactEvmScheme } from "@x402/evm/exact/server";
+
+import {
+  HTTPFacilitatorClient,
+} from "@x402/core/server";
+
+import {
+  ExactEvmScheme,
+} from "@x402/evm/exact/server";
 
 import {
   ChainName,
@@ -12,21 +19,34 @@ import {
   NewPair,
 } from "./types";
 
-import { isSupportedChain } from "./chains";
+import {
+  isSupportedChain,
+} from "./chains";
 
 import {
   KVStoreImpl,
 } from "./kv";
 
-import { handleWebhook } from "./webhook-handler";
-import { handleCron } from "./scanner";
+import {
+  handleSignedWebhook,
+} from "./webhook-handler";
+
+import {
+  handleCron,
+} from "./scanner";
 
 interface Env {
   PAIRS_KV: KVNamespace;
+
   PAY_TO?: string;
+
   X402_NETWORK?: string;
+
   X402_PRICE?: string;
+
   X402_FACILITATOR_URL?: string;
+
+  ALCHEMY_SIGNING_KEY?: string;
 }
 
 interface ScanRequest {
@@ -44,57 +64,93 @@ interface ScanResponse {
   total_found: number;
 }
 
-const app = new Hono<{ Bindings: Env }>();
+const app =
+  new Hono<{
+    Bindings: Env;
+  }>();
 
 const DEFAULT_WINDOW_MINUTES = 5;
 const MAX_WINDOW_MINUTES = 10;
 const HEALTH_KEY = "health:status";
 
-function normalizeAddress(address: string): string {
+function normalizeAddress(
+  address: string
+): string {
   return address.toLowerCase();
 }
 
-function getFactories(chain: ChainName): string[] {
-  return FACTORIES[chain].map(normalizeAddress);
+function getFactories(
+  chain: ChainName
+): string[] {
+  return FACTORIES[
+    chain
+  ].map(normalizeAddress);
 }
 
 function validateFactories(
   chain: ChainName,
   factories?: string[]
 ): string[] | null {
-  if (factories === undefined) {
-    return getFactories(chain);
+  if (
+    factories === undefined
+  ) {
+    return getFactories(
+      chain
+    );
   }
 
   if (
-    !Array.isArray(factories) ||
+    !Array.isArray(
+      factories
+    ) ||
     factories.length === 0
   ) {
     return null;
   }
 
-  const allowed = new Set(getFactories(chain));
-  const normalized = factories.map(normalizeAddress);
+  const allowed =
+    new Set(
+      getFactories(chain)
+    );
 
-  for (const factory of normalized) {
-    if (!allowed.has(factory)) {
+  const normalized =
+    factories.map(
+      normalizeAddress
+    );
+
+  for (
+    const factory of normalized
+  ) {
+    if (
+      !allowed.has(factory)
+    ) {
       return null;
     }
   }
 
-  return [...new Set(normalized)];
+  return [
+    ...new Set(normalized),
+  ];
 }
 
-function validateWindow(value: unknown): number | null {
-  if (value === undefined) {
+function validateWindow(
+  value: unknown
+): number | null {
+  if (
+    value === undefined
+  ) {
     return DEFAULT_WINDOW_MINUTES;
   }
 
   if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
+    typeof value !==
+      "number" ||
+    !Number.isInteger(
+      value
+    ) ||
     value < 1 ||
-    value > MAX_WINDOW_MINUTES
+    value >
+      MAX_WINDOW_MINUTES
   ) {
     return null;
   }
@@ -110,18 +166,24 @@ async function getLatestBlock(
       ? "https://eth.llamarpc.com"
       : "https://bsc-dataseed.binance.org";
 
-  const response = await fetch(rpc, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method: "eth_blockNumber",
-      params: [],
-    }),
-  });
+  const response =
+    await fetch(
+      rpc,
+      {
+        method: "POST",
+        headers: {
+          "content-type":
+            "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method:
+            "eth_blockNumber",
+          params: [],
+        }),
+      }
+    );
 
   if (!response.ok) {
     throw new Error(
@@ -129,23 +191,32 @@ async function getLatestBlock(
     );
   }
 
-  const body = (await response.json()) as {
-    result?: string;
-    error?: unknown;
-  };
+  const body =
+    (await response.json()) as {
+      result?: string;
+      error?: unknown;
+    };
 
   if (
     body.error ||
-    typeof body.result !== "string"
+    typeof body.result !==
+      "string"
   ) {
     throw new Error(
       "RPC did not return a valid block number"
     );
   }
 
-  const block = Number(BigInt(body.result));
+  const block =
+    Number(
+      BigInt(body.result)
+    );
 
-  if (!Number.isSafeInteger(block)) {
+  if (
+    !Number.isSafeInteger(
+      block
+    )
+  ) {
     throw new Error(
       "RPC returned an unsafe block number"
     );
@@ -156,24 +227,35 @@ async function getLatestBlock(
 
 async function updateHealth(
   kv: KVNamespace,
-  field: "last_webhook" | "last_cron"
+  field:
+    | "last_webhook"
+    | "last_cron"
 ): Promise<void> {
   const current =
     (await kv.get<{
-      last_webhook: string | null;
-      last_cron: string | null;
-    }>(HEALTH_KEY, "json")) ?? {
+      last_webhook:
+        | string
+        | null;
+      last_cron:
+        | string
+        | null;
+    }>(
+      HEALTH_KEY,
+      "json"
+    )) ?? {
       last_webhook: null,
       last_cron: null,
     };
 
-  current[field] = new Date().toISOString();
+  current[field] =
+    new Date().toISOString();
 
   await kv.put(
     HEALTH_KEY,
     JSON.stringify(current),
     {
-      expirationTtl: 60 * 60 * 24 * 7,
+      expirationTtl:
+        60 * 60 * 24 * 7,
     }
   );
 }
@@ -181,32 +263,56 @@ async function updateHealth(
 async function getHealth(
   kv: KVNamespace
 ): Promise<{
-  last_webhook: string | null;
-  last_cron: string | null;
+  last_webhook:
+    | string
+    | null;
+
+  last_cron:
+    | string
+    | null;
+
   pairs_cached: number;
 }> {
   const status =
     (await kv.get<{
-      last_webhook: string | null;
-      last_cron: string | null;
-    }>(HEALTH_KEY, "json")) ?? {
+      last_webhook:
+        | string
+        | null;
+
+      last_cron:
+        | string
+        | null;
+    }>(
+      HEALTH_KEY,
+      "json"
+    )) ?? {
       last_webhook: null,
       last_cron: null,
     };
 
-  const store = new KVStoreImpl(kv);
+  const store =
+    new KVStoreImpl(kv);
 
   const [
     ethereumPairs,
     bscPairs,
-  ] = await Promise.all([
-    store.listByChain("ethereum"),
-    store.listByChain("bsc"),
-  ]);
+  ] =
+    await Promise.all([
+      store.listByChain(
+        "ethereum"
+      ),
+      store.listByChain(
+        "bsc"
+      ),
+    ]);
 
   return {
-    last_webhook: status.last_webhook,
-    last_cron: status.last_cron,
+    last_webhook:
+      status.last_webhook,
+
+    last_cron:
+      status.last_cron,
+
     pairs_cached:
       ethereumPairs.length +
       bscPairs.length,
@@ -223,7 +329,8 @@ function createX402Middleware(
   }
 
   const price =
-    env.X402_PRICE ?? "$0.01";
+    env.X402_PRICE ??
+    "$0.01";
 
   const facilitator =
     new HTTPFacilitatorClient({
@@ -247,15 +354,25 @@ function createX402Middleware(
       "POST /scan": {
         accepts: [
           {
-            scheme: "exact",
+            scheme:
+              "exact",
+
             price,
-            network: "eip155:84532",
-            payTo: env.PAY_TO,
-            maxTimeoutSeconds: 60,
+
+            network:
+              "eip155:84532",
+
+            payTo:
+              env.PAY_TO,
+
+            maxTimeoutSeconds:
+              60,
           },
         ],
+
         description:
           "Scan recently created AMM pairs",
+
         mimeType:
           "application/json",
       },
@@ -269,9 +386,14 @@ app.use(
   async (c, next) => {
     try {
       const middleware =
-        createX402Middleware(c.env);
+        createX402Middleware(
+          c.env
+        );
 
-      return middleware(c, next);
+      return middleware(
+        c,
+        next
+      );
     } catch (error) {
       console.warn(
         "x402 configuration error:",
@@ -322,21 +444,39 @@ app.post(
   "/webhook",
   async (c) => {
     try {
-      const payload =
-        await c.req.json();
       const response =
-  await handleWebhook(
-    payload,
-    {
-      PAIRS_KV:
-        c.env.PAIRS_KV as unknown as KVNamespace,
-    }
-  );
+        await handleSignedWebhook(
+          c.req.raw,
+          {
+            PAIRS_KV:
+              c.env.PAIRS_KV,
 
-await updateHealth(
-  c.env.PAIRS_KV as unknown as KVNamespace,
-  "last_webhook"
-);
+            ALCHEMY_SIGNING_KEY:
+              c.env.ALCHEMY_SIGNING_KEY,
+          }
+        );
+
+      /*
+       * Only mark the webhook as healthy
+       * after successful signature validation
+       * and request processing.
+       */
+      if (
+        response.status >= 200 &&
+        response.status < 300
+      ) {
+        try {
+          await updateHealth(
+            c.env.PAIRS_KV,
+            "last_webhook"
+          );
+        } catch (healthError) {
+          console.warn(
+            "Failed to update webhook health:",
+            healthError
+          );
+        }
+      }
 
       return response;
     } catch (error) {
@@ -345,9 +485,14 @@ await updateHealth(
         error
       );
 
-      return new Response("OK", {
-        status: 200,
-      });
+      return c.json(
+        {
+          ok: false,
+          error:
+            "webhook_processing_failed",
+        },
+        500
+      );
     }
   }
 );
@@ -355,7 +500,8 @@ await updateHealth(
 app.post(
   "/scan",
   async (c) => {
-    let body: ScanRequest;
+    let body:
+      ScanRequest;
 
     try {
       body =
@@ -371,7 +517,8 @@ app.post(
     }
 
     if (
-      typeof body !== "object" ||
+      typeof body !==
+        "object" ||
       body === null ||
       Array.isArray(body)
     ) {
@@ -385,8 +532,11 @@ app.post(
     }
 
     if (
-      typeof body.chain !== "string" ||
-      !isSupportedChain(body.chain)
+      typeof body.chain !==
+        "string" ||
+      !isSupportedChain(
+        body.chain
+      )
     ) {
       return c.json(
         {
@@ -397,7 +547,8 @@ app.post(
       );
     }
 
-    const chain: ChainName =
+    const chain:
+      ChainName =
       body.chain;
 
     const windowMinutes =
@@ -405,7 +556,10 @@ app.post(
         body.window_minutes
       );
 
-    if (windowMinutes === null) {
+    if (
+      windowMinutes ===
+      null
+    ) {
       return c.json(
         {
           error:
@@ -421,7 +575,9 @@ app.post(
         body.factories
       );
 
-    if (factories === null) {
+    if (
+      factories === null
+    ) {
       return c.json(
         {
           error:
@@ -433,10 +589,13 @@ app.post(
 
     try {
       const currentBlock =
-        await getLatestBlock(chain);
+        await getLatestBlock(
+          chain
+        );
 
       const blocksPerMinute =
-        chain === "ethereum"
+        chain ===
+        "ethereum"
           ? 5
           : 20;
 
@@ -488,14 +647,19 @@ app.post(
       const response:
         ScanResponse = {
         chain,
+
         window_minutes:
           windowMinutes,
+
         from_block:
           fromBlock,
+
         to_block:
           currentBlock,
+
         new_pairs:
           newPairs,
+
         total_found:
           newPairs.length,
       };
@@ -512,7 +676,8 @@ app.post(
 
       return c.json(
         {
-          error: "Scan failed",
+          error:
+            "Scan failed",
         },
         500
       );
@@ -521,7 +686,8 @@ app.post(
 );
 
 export default {
-  fetch: app.fetch,
+  fetch:
+    app.fetch,
 
   async scheduled(
     _event: ScheduledEvent,
