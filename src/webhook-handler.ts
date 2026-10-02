@@ -57,7 +57,9 @@ const RPCS: Record<string, string> = {
   bsc: "https://bsc-rpc.publicnode.com",
 };
 
-function normalizeAddress(value?: string): string | null {
+function normalizeAddress(
+  value?: string
+): string | null {
   if (!value) {
     return null;
   }
@@ -83,7 +85,9 @@ function getBlockAndLogs(
   );
 }
 
-function getLogAddress(log: WebhookLog): string | null {
+function getLogAddress(
+  log: WebhookLog
+): string | null {
   return normalizeAddress(
     log.account?.address ?? log.address
   );
@@ -111,11 +115,9 @@ function extractPair(
 ): ParsedPair | null {
   const topics = log.topics ?? [];
 
-  // PairCreated has:
-  // topic0 = event signature
-  // topic1 = token0
-  // topic2 = token1
-  // data = pair address + pair index
+  // STEP 7:
+  // Verify PairCreated event structure.
+
   if (topics.length < 3) {
     return null;
   }
@@ -154,9 +156,10 @@ function extractPair(
       return null;
     }
 
-    // PairCreated data contains:
+    // PairCreated data:
     // 32 bytes pair address
     // 32 bytes pair index
+
     if (log.data.length < 130) {
       return null;
     }
@@ -200,18 +203,21 @@ async function rpc(
   method: string,
   params: unknown[]
 ): Promise<any> {
-  const response = await fetch(rpcUrl, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-    },
-    body: JSON.stringify({
-      jsonrpc: "2.0",
-      id: 1,
-      method,
-      params,
-    }),
-  });
+  const response = await fetch(
+    rpcUrl,
+    {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      }),
+    }
+  );
 
   if (!response.ok) {
     throw new Error(
@@ -363,6 +369,26 @@ function extractInitialHolders(
   return Array.from(holders);
 }
 
+// STEP 12:
+// Check whether this pair was already stored.
+
+async function pairAlreadyStored(
+  env: Env,
+  chain: string,
+  pairAddress: string
+): Promise<boolean> {
+  const key =
+    `${chain}:${pairAddress.toLowerCase()}`;
+
+  const existing =
+    await env.PAIRS_KV.get(key);
+
+  return existing !== null;
+}
+
+// STEP 11:
+// Store the verified pair in KV.
+
 async function storePair(
   env: Env,
   chain: string,
@@ -379,13 +405,20 @@ async function storePair(
     pair: pair.pair,
     token0: pair.token0,
     token1: pair.token1,
+
     token0_raw: pair.token0,
     token1_raw: pair.token1,
+
     pair_index:
       pair.pairIndex.toString(),
+
     tx_hash: txHash,
-    block_number: blockNumber,
+
+    block_number:
+      blockNumber,
+
     holders,
+
     detected_at:
       new Date().toISOString(),
   };
@@ -431,7 +464,8 @@ export async function handleWebhook(
       JSON.stringify({
         ok: true,
         processed: 0,
-        reason: "invalid_block_number",
+        reason:
+          "invalid_block_number",
       }),
       {
         status: 200,
@@ -449,10 +483,10 @@ export async function handleWebhook(
   let processed = 0;
 
   for (const log of logs) {
-    // ==========================================
+    // =========================================
     // STEP 7
-    // Verify factory + PairCreated + pair data
-    // ==========================================
+    // Factory verification
+    // =========================================
 
     const factory =
       getLogAddress(log);
@@ -491,10 +525,32 @@ export async function handleWebhook(
       continue;
     }
 
-    // ==========================================
+    // =========================================
+    // STEP 12
+    // Deduplication before expensive RPC calls
+    // =========================================
+
+    try {
+      const alreadyStored =
+        await pairAlreadyStored(
+          env,
+          chain,
+          parsed.pair
+        );
+
+      if (alreadyStored) {
+        continue;
+      }
+    } catch {
+      // If KV cannot be checked,
+      // do not risk duplicate processing.
+      continue;
+    }
+
+    // =========================================
     // STEP 8
-    // Verify transaction receipt + success
-    // ==========================================
+    // Transaction receipt verification
+    // =========================================
 
     let receipt: any;
 
@@ -505,17 +561,19 @@ export async function handleWebhook(
           txHash
         );
     } catch {
+      // STEP 13:
+      // One failed RPC must not abort
+      // the complete webhook.
       continue;
     }
 
-    // Receipt may not exist yet.
     if (!receipt) {
       continue;
     }
 
-    // Ethereum JSON-RPC receipt status:
-    // 0x1 = success
-    // 0x0 = reverted
+    // 0x1 = successful transaction
+    // 0x0 = reverted transaction
+
     if (
       receipt.status !== "0x1" &&
       receipt.status !== 1
@@ -523,8 +581,6 @@ export async function handleWebhook(
       continue;
     }
 
-    // Make sure the receipt belongs
-    // to the transaction we processed.
     if (
       receipt.transactionHash &&
       receipt.transactionHash.toLowerCase() !==
@@ -533,10 +589,10 @@ export async function handleWebhook(
       continue;
     }
 
-    // ==========================================
+    // =========================================
     // STEP 9
-    // Verify pair address contains contract code
-    // ==========================================
+    // Verify pair is an actual contract
+    // =========================================
 
     let code: string;
 
@@ -550,8 +606,9 @@ export async function handleWebhook(
       continue;
     }
 
-    // eth_getCode returns "0x" for an EOA
-    // and bytecode for a deployed contract.
+    // eth_getCode returns "0x"
+    // when there is no contract code.
+
     if (
       !code ||
       code === "0x" ||
@@ -560,9 +617,10 @@ export async function handleWebhook(
       continue;
     }
 
-    // ==========================================
-    // Existing holder extraction
-    // ==========================================
+    // =========================================
+    // STEP 10
+    // Extract initial holders
+    // =========================================
 
     const holders =
       extractInitialHolders(
@@ -572,9 +630,20 @@ export async function handleWebhook(
         parsed.pair
       );
 
-    // ==========================================
-    // Store verified pair
-    // ==========================================
+    const uniqueHolders =
+      Array.from(
+        new Set(
+          holders.map(
+            (address) =>
+              address.toLowerCase()
+          )
+        )
+      );
+
+    // =========================================
+    // STEP 11
+    // Store verified pair in KV
+    // =========================================
 
     try {
       await storePair(
@@ -583,11 +652,14 @@ export async function handleWebhook(
         parsed,
         txHash,
         blockNumber,
-        holders
+        uniqueHolders
       );
 
       processed++;
     } catch {
+      // STEP 13:
+      // KV failure for one pair does not
+      // abort processing of other logs.
       continue;
     }
   }
@@ -596,7 +668,8 @@ export async function handleWebhook(
     JSON.stringify({
       ok: true,
       processed,
-      block_number: blockNumber,
+      block_number:
+        blockNumber,
     }),
     {
       status: 200,
@@ -663,9 +736,9 @@ export default {
     _env: Env,
     _ctx: ExecutionContext
   ): Promise<void> {
-    // Cron remains intentionally unchanged
-    // for now. We are focusing on webhook
-    // processing steps 7, 8 and 9.
+    // Cron processing is intentionally
+    // paused while we finish the webhook
+    // pipeline.
     return;
   },
 };
