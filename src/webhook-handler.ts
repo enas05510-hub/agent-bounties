@@ -27,35 +27,48 @@ type WebhookLog = {
   transactionHash?: string;
 };
 
+type WebhookBlock = {
+  number?: number | string;
+  logs?: WebhookLog[];
+};
+
 type WebhookPayload = {
   event?: {
     data?: {
-      block?: {
-        number?: number | string;
-        logs?: WebhookLog[];
-      };
+      block?: WebhookBlock;
     };
+    block?: WebhookBlock;
   };
   data?: {
-    block?: {
-      number?: number | string;
-      logs?: WebhookLog[];
-    };
+    block?: WebhookBlock;
   };
-  block?: {
-    number?: number | string;
-    logs?: WebhookLog[];
-  };
+  block?: WebhookBlock;
 };
 
 interface Env {
   PAIRS_KV: KVNamespace;
+  ALCHEMY_SIGNING_KEY: string;
 }
 
 const RPCS: Record<string, string> = {
   ethereum: "https://ethereum-rpc.publicnode.com",
   bsc: "https://bsc-rpc.publicnode.com",
 };
+
+function jsonResponse(
+  body: unknown,
+  status = 200
+): Response {
+  return new Response(
+    JSON.stringify(body),
+    {
+      status,
+      headers: {
+        "content-type": "application/json",
+      },
+    }
+  );
+}
 
 function normalizeAddress(
   value?: string
@@ -73,12 +86,10 @@ function normalizeAddress(
 
 function getBlockAndLogs(
   payload: WebhookPayload
-): {
-  number?: number | string;
-  logs?: WebhookLog[];
-} | null {
+): WebhookBlock | null {
   return (
     payload.event?.data?.block ??
+    payload.event?.block ??
     payload.data?.block ??
     payload.block ??
     null
@@ -89,18 +100,24 @@ function getLogAddress(
   log: WebhookLog
 ): string | null {
   return normalizeAddress(
-    log.account?.address ?? log.address
+    log.account?.address ??
+      log.address
   );
 }
 
 function getTransactionHash(
   log: WebhookLog
 ): string | null {
-  return (
+  const hash =
     log.transaction?.hash ??
     log.transactionHash ??
-    null
-  );
+    null;
+
+  if (!hash) {
+    return null;
+  }
+
+  return hash;
 }
 
 type ParsedPair = {
@@ -114,9 +131,6 @@ function extractPair(
   log: WebhookLog
 ): ParsedPair | null {
   const topics = log.topics ?? [];
-
-  // STEP 7:
-  // Verify PairCreated event structure.
 
   if (topics.length < 3) {
     return null;
@@ -134,17 +148,19 @@ function extractPair(
   }
 
   try {
-    const token0Raw = ethers.dataSlice(
-      topics[1],
-      12,
-      32
-    );
+    const token0Raw =
+      ethers.dataSlice(
+        topics[1],
+        12,
+        32
+      );
 
-    const token1Raw = ethers.dataSlice(
-      topics[2],
-      12,
-      32
-    );
+    const token1Raw =
+      ethers.dataSlice(
+        topics[2],
+        12,
+        32
+      );
 
     const token0 =
       normalizeAddress(token0Raw);
@@ -156,19 +172,16 @@ function extractPair(
       return null;
     }
 
-    // PairCreated data:
-    // 32 bytes pair address
-    // 32 bytes pair index
-
     if (log.data.length < 130) {
       return null;
     }
 
-    const pairRaw = ethers.dataSlice(
-      log.data,
-      12,
-      32
-    );
+    const pairRaw =
+      ethers.dataSlice(
+        log.data,
+        12,
+        32
+      );
 
     const pair =
       normalizeAddress(pairRaw);
@@ -203,21 +216,23 @@ async function rpc(
   method: string,
   params: unknown[]
 ): Promise<any> {
-  const response = await fetch(
-    rpcUrl,
-    {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        jsonrpc: "2.0",
-        id: 1,
-        method,
-        params,
-      }),
-    }
-  );
+  const response =
+    await fetch(
+      rpcUrl,
+      {
+        method: "POST",
+        headers: {
+          "content-type":
+            "application/json",
+        },
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+          id: 1,
+          method,
+          params,
+        }),
+      }
+    );
 
   if (!response.ok) {
     throw new Error(
@@ -231,7 +246,7 @@ async function rpc(
   if (json.error) {
     throw new Error(
       json.error.message ??
-      "RPC request failed"
+        "RPC request failed"
     );
   }
 
@@ -328,21 +343,23 @@ function extractInitialHolders(
     let to: string | null = null;
 
     try {
-      from = normalizeAddress(
-        ethers.dataSlice(
-          log.topics[1],
-          12,
-          32
-        )
-      );
+      from =
+        normalizeAddress(
+          ethers.dataSlice(
+            log.topics[1],
+            12,
+            32
+          )
+        );
 
-      to = normalizeAddress(
-        ethers.dataSlice(
-          log.topics[2],
-          12,
-          32
-        )
-      );
+      to =
+        normalizeAddress(
+          ethers.dataSlice(
+            log.topics[2],
+            12,
+            32
+          )
+        );
     } catch {
       continue;
     }
@@ -369,9 +386,6 @@ function extractInitialHolders(
   return Array.from(holders);
 }
 
-// STEP 12:
-// Check whether this pair was already stored.
-
 async function pairAlreadyStored(
   env: Env,
   chain: string,
@@ -386,14 +400,11 @@ async function pairAlreadyStored(
   return existing !== null;
 }
 
-// STEP 11:
-// Store the verified pair in KV.
-
 async function storePair(
   env: Env,
   chain: string,
   pair: ParsedPair,
-  txHash: string | null,
+  txHash: string,
   blockNumber: number,
   holders: string[]
 ): Promise<void> {
@@ -429,6 +440,69 @@ async function storePair(
   );
 }
 
+/**
+ * Verify Alchemy's HMAC SHA-256 signature.
+ *
+ * IMPORTANT:
+ * The signature must be calculated over
+ * the exact raw request body.
+ */
+async function verifyAlchemySignature(
+  rawBody: string,
+  signature: string,
+  signingKey: string
+): Promise<boolean> {
+  if (
+    !signature ||
+    !signingKey
+  ) {
+    return false;
+  }
+
+  try {
+    const encoder =
+      new TextEncoder();
+
+    const key =
+      await crypto.subtle.importKey(
+        "raw",
+        encoder.encode(signingKey),
+        {
+          name: "HMAC",
+          hash: "SHA-256",
+        },
+        false,
+        ["sign"]
+      );
+
+    const signatureBytes =
+      await crypto.subtle.sign(
+        "HMAC",
+        key,
+        encoder.encode(rawBody)
+      );
+
+    const calculated =
+      Array.from(
+        new Uint8Array(
+          signatureBytes
+        )
+      )
+        .map(
+          (byte) =>
+            byte
+              .toString(16)
+              .padStart(2, "0")
+        )
+        .join("");
+
+    return calculated ===
+      signature.toLowerCase();
+  } catch {
+    return false;
+  }
+}
+
 export async function handleWebhook(
   payload: WebhookPayload,
   env: Env
@@ -437,20 +511,15 @@ export async function handleWebhook(
     getBlockAndLogs(payload);
 
   if (!block) {
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        processed: 0,
-        reason: "no_block",
-      }),
-      {
-        status: 200,
-        headers: {
-          "content-type":
-            "application/json",
-        },
-      }
+    console.log(
+      "Webhook received without a block"
     );
+
+    return jsonResponse({
+      ok: true,
+      processed: 0,
+      reason: "no_block",
+    });
   }
 
   const blockNumber =
@@ -460,34 +529,25 @@ export async function handleWebhook(
     !Number.isFinite(blockNumber) ||
     blockNumber <= 0
   ) {
-    return new Response(
-      JSON.stringify({
-        ok: true,
-        processed: 0,
-        reason:
-          "invalid_block_number",
-      }),
-      {
-        status: 200,
-        headers: {
-          "content-type":
-            "application/json",
-        },
-      }
+    console.log(
+      "Webhook received with invalid block number"
     );
+
+    return jsonResponse({
+      ok: true,
+      processed: 0,
+      reason:
+        "invalid_block_number",
+    });
   }
 
   const logs =
     block.logs ?? [];
 
   let processed = 0;
+  let candidates = 0;
 
   for (const log of logs) {
-    // =========================================
-    // STEP 7
-    // Factory verification
-    // =========================================
-
     const factory =
       getLogAddress(log);
 
@@ -511,10 +571,15 @@ export async function handleWebhook(
       continue;
     }
 
+    candidates++;
+
     const txHash =
       getTransactionHash(log);
 
     if (!txHash) {
+      console.warn(
+        "PairCreated candidate has no transaction hash"
+      );
       continue;
     }
 
@@ -525,11 +590,6 @@ export async function handleWebhook(
       continue;
     }
 
-    // =========================================
-    // STEP 12
-    // Deduplication before expensive RPC calls
-    // =========================================
-
     try {
       const alreadyStored =
         await pairAlreadyStored(
@@ -539,18 +599,17 @@ export async function handleWebhook(
         );
 
       if (alreadyStored) {
+        console.log(
+          `Pair already stored: ${parsed.pair}`
+        );
         continue;
       }
     } catch {
-      // If KV cannot be checked,
-      // do not risk duplicate processing.
+      console.warn(
+        "KV deduplication check failed"
+      );
       continue;
     }
-
-    // =========================================
-    // STEP 8
-    // Transaction receipt verification
-    // =========================================
 
     let receipt: any;
 
@@ -561,23 +620,26 @@ export async function handleWebhook(
           txHash
         );
     } catch {
-      // STEP 13:
-      // One failed RPC must not abort
-      // the complete webhook.
+      console.warn(
+        `Receipt lookup failed: ${txHash}`
+      );
       continue;
     }
 
     if (!receipt) {
+      console.warn(
+        `Receipt not found: ${txHash}`
+      );
       continue;
     }
-
-    // 0x1 = successful transaction
-    // 0x0 = reverted transaction
 
     if (
       receipt.status !== "0x1" &&
       receipt.status !== 1
     ) {
+      console.warn(
+        `Transaction reverted: ${txHash}`
+      );
       continue;
     }
 
@@ -586,13 +648,11 @@ export async function handleWebhook(
       receipt.transactionHash.toLowerCase() !==
         txHash.toLowerCase()
     ) {
+      console.warn(
+        `Receipt hash mismatch: ${txHash}`
+      );
       continue;
     }
-
-    // =========================================
-    // STEP 9
-    // Verify pair is an actual contract
-    // =========================================
 
     let code: string;
 
@@ -603,24 +663,22 @@ export async function handleWebhook(
           parsed.pair
         );
     } catch {
+      console.warn(
+        `Contract code lookup failed: ${parsed.pair}`
+      );
       continue;
     }
-
-    // eth_getCode returns "0x"
-    // when there is no contract code.
 
     if (
       !code ||
       code === "0x" ||
       code.length <= 2
     ) {
+      console.warn(
+        `Pair has no contract code: ${parsed.pair}`
+      );
       continue;
     }
-
-    // =========================================
-    // STEP 10
-    // Extract initial holders
-    // =========================================
 
     const holders =
       extractInitialHolders(
@@ -640,11 +698,6 @@ export async function handleWebhook(
         )
       );
 
-    // =========================================
-    // STEP 11
-    // Store verified pair in KV
-    // =========================================
-
     try {
       await storePair(
         env,
@@ -656,29 +709,29 @@ export async function handleWebhook(
       );
 
       processed++;
+
+      console.log(
+        `Pair stored: ${parsed.pair} | holders: ${uniqueHolders.length}`
+      );
     } catch {
-      // STEP 13:
-      // KV failure for one pair does not
-      // abort processing of other logs.
+      console.warn(
+        `KV storage failed: ${parsed.pair}`
+      );
       continue;
     }
   }
 
-  return new Response(
-    JSON.stringify({
-      ok: true,
-      processed,
-      block_number:
-        blockNumber,
-    }),
-    {
-      status: 200,
-      headers: {
-        "content-type":
-          "application/json",
-      },
-    }
+  console.log(
+    `Webhook processed | block=${blockNumber} | candidates=${candidates} | stored=${processed}`
   );
+
+  return jsonResponse({
+    ok: true,
+    processed,
+    candidates,
+    block_number:
+      blockNumber,
+  });
 }
 
 export default {
@@ -689,44 +742,83 @@ export default {
     if (
       request.method !== "POST"
     ) {
-      return new Response(
-        JSON.stringify({
-          ok: true,
-          service:
-            "agent-bounties",
-        }),
+      return jsonResponse({
+        ok: true,
+        service:
+          "agent-bounties",
+      });
+    }
+
+    const signingKey =
+      env.ALCHEMY_SIGNING_KEY;
+
+    if (!signingKey) {
+      console.error(
+        "ALCHEMY_SIGNING_KEY is not configured"
+      );
+
+      return jsonResponse(
         {
-          status: 200,
-          headers: {
-            "content-type":
-              "application/json",
-          },
-        }
+          ok: false,
+          error:
+            "webhook_security_not_configured",
+        },
+        500
+      );
+    }
+
+    const rawBody =
+      await request.text();
+
+    const signature =
+      request.headers.get(
+        "x-alchemy-signature"
+      );
+
+    if (
+      !signature ||
+      !(await verifyAlchemySignature(
+        rawBody,
+        signature,
+        signingKey
+      ))
+    ) {
+      console.warn(
+        "Rejected webhook: invalid Alchemy signature"
+      );
+
+      return jsonResponse(
+        {
+          ok: false,
+          error:
+            "invalid_signature",
+        },
+        401
       );
     }
 
     try {
       const payload =
-        await request.json<WebhookPayload>();
+        JSON.parse(
+          rawBody
+        ) as WebhookPayload;
 
       return handleWebhook(
         payload,
         env
       );
     } catch {
-      return new Response(
-        JSON.stringify({
+      console.warn(
+        "Webhook contained invalid JSON"
+      );
+
+      return jsonResponse(
+        {
           ok: false,
           error:
             "invalid_json",
-        }),
-        {
-          status: 400,
-          headers: {
-            "content-type":
-              "application/json",
-          },
-        }
+        },
+        400
       );
     }
   },
@@ -736,9 +828,8 @@ export default {
     _env: Env,
     _ctx: ExecutionContext
   ): Promise<void> {
-    // Cron processing is intentionally
-    // paused while we finish the webhook
-    // pipeline.
+    // Intentionally paused.
+    // Webhook pipeline is the active ingestion path.
     return;
   },
 };
