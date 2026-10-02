@@ -1,18 +1,50 @@
 import { ethers } from "ethers";
 
+import {
+  ChainName,
+  NewPair,
+} from "./types";
+
+import {
+  pairKey,
+  KVStoreImpl,
+  KVNamespaceLike,
+} from "./kv";
+
+import {
+  extractInitialHoldersFromReceipt,
+} from "./holders";
+
 const PAIR_CREATED_TOPIC =
   "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
-const FACTORIES: Record<string, string> = {
-  "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f": "ethereum",
-  "0x1f98431c8ad98523631ae4a59f267346ea31f984": "ethereum",
-  "0xca143ce32fe78f1f7019d7d551a6402fc5350c73": "bsc",
-  "0x0fbcf9fa4f9c56b0f40a671ad40e0805a091865": "bsc",
+const FACTORIES: Record<
+  string,
+  ChainName
+> = {
+  "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f":
+    "ethereum",
+
+  "0x1f98431c8ad98523631ae4a59f267346ea31f984":
+    "ethereum",
+
+  "0xca143ce32fe78f1f7019d7d551a6402fc5350c73":
+    "bsc",
+
+  "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865":
+    "bsc",
 };
 
-const TRANSFER_TOPIC = ethers.id(
-  "Transfer(address,address,uint256)"
-);
+const RPCS: Record<
+  ChainName,
+  string
+> = {
+  ethereum:
+    "https://ethereum-rpc.publicnode.com",
+
+  bsc:
+    "https://bsc-rpc.publicnode.com",
+};
 
 type WebhookLog = {
   data?: string;
@@ -45,15 +77,10 @@ type WebhookPayload = {
   block?: WebhookBlock;
 };
 
-interface Env {
+export interface WebhookEnv {
   PAIRS_KV: KVNamespace;
   ALCHEMY_SIGNING_KEY?: string;
 }
-
-const RPCS: Record<string, string> = {
-  ethereum: "https://ethereum-rpc.publicnode.com",
-  bsc: "https://bsc-rpc.publicnode.com",
-};
 
 function jsonResponse(
   body: unknown,
@@ -64,7 +91,8 @@ function jsonResponse(
     {
       status,
       headers: {
-        "content-type": "application/json",
+        "content-type":
+          "application/json",
       },
     }
   );
@@ -78,7 +106,9 @@ function normalizeAddress(
   }
 
   try {
-    return ethers.getAddress(value);
+    return ethers.getAddress(
+      value
+    );
   } catch {
     return null;
   }
@@ -108,16 +138,11 @@ function getLogAddress(
 function getTransactionHash(
   log: WebhookLog
 ): string | null {
-  const hash =
+  return (
     log.transaction?.hash ??
     log.transactionHash ??
-    null;
-
-  if (!hash) {
-    return null;
-  }
-
-  return hash;
+    null
+  );
 }
 
 type ParsedPair = {
@@ -130,9 +155,12 @@ type ParsedPair = {
 function extractPair(
   log: WebhookLog
 ): ParsedPair | null {
-  const topics = log.topics ?? [];
+  const topics =
+    log.topics ?? [];
 
-  if (topics.length < 3) {
+  if (
+    topics.length < 3
+  ) {
     return null;
   }
 
@@ -163,16 +191,25 @@ function extractPair(
       );
 
     const token0 =
-      normalizeAddress(token0Raw);
+      normalizeAddress(
+        token0Raw
+      );
 
     const token1 =
-      normalizeAddress(token1Raw);
+      normalizeAddress(
+        token1Raw
+      );
 
-    if (!token0 || !token1) {
+    if (
+      !token0 ||
+      !token1
+    ) {
       return null;
     }
 
-    if (log.data.length < 130) {
+    if (
+      log.data.length < 130
+    ) {
       return null;
     }
 
@@ -184,7 +221,9 @@ function extractPair(
       );
 
     const pair =
-      normalizeAddress(pairRaw);
+      normalizeAddress(
+        pairRaw
+      );
 
     if (!pair) {
       return null;
@@ -197,14 +236,12 @@ function extractPair(
         64
       );
 
-    const pairIndex =
-      BigInt(pairIndexRaw);
-
     return {
       token0,
       token1,
       pair,
-      pairIndex,
+      pairIndex:
+        BigInt(pairIndexRaw),
     };
   } catch {
     return null;
@@ -295,164 +332,139 @@ async function getCode(
   );
 }
 
-function extractInitialHolders(
-  receipt: any,
-  token0: string,
-  token1: string,
-  pair: string
-): string[] {
-  const holders =
-    new Set<string>();
+async function getTokenSymbol(
+  rpcUrl: string,
+  token: string
+): Promise<string> {
+  try {
+    const data =
+      ethers.id(
+        "symbol()"
+      ).slice(0, 10);
 
-  const logs =
-    receipt?.logs ?? [];
+    const result =
+      await rpcWithRetry(
+        rpcUrl,
+        "eth_call",
+        [
+          {
+            to: token,
+            data,
+          },
+          "latest",
+        ]
+      );
 
-  for (const log of logs) {
     if (
-      !Array.isArray(log.topics) ||
-      log.topics.length < 3
+      typeof result !==
+        "string" ||
+      result === "0x"
     ) {
-      continue;
+      return "UNKNOWN";
     }
-
-    if (
-      log.topics[0]?.toLowerCase() !==
-      TRANSFER_TOPIC.toLowerCase()
-    ) {
-      continue;
-    }
-
-    const tokenAddress =
-      normalizeAddress(log.address);
-
-    if (!tokenAddress) {
-      continue;
-    }
-
-    const isToken =
-      tokenAddress.toLowerCase() ===
-        token0.toLowerCase() ||
-      tokenAddress.toLowerCase() ===
-        token1.toLowerCase();
-
-    if (!isToken) {
-      continue;
-    }
-
-    let from: string | null = null;
-    let to: string | null = null;
 
     try {
-      from =
-        normalizeAddress(
-          ethers.dataSlice(
-            log.topics[1],
-            12,
-            32
-          )
-        );
-
-      to =
-        normalizeAddress(
-          ethers.dataSlice(
-            log.topics[2],
-            12,
-            32
-          )
-        );
+      return ethers.AbiCoder
+        .defaultAbiCoder()
+        .decode(
+          ["string"],
+          result
+        )[0]
+        .toString();
     } catch {
-      continue;
-    }
+      try {
+        const bytes32 =
+          ethers.AbiCoder
+            .defaultAbiCoder()
+            .decode(
+              ["bytes32"],
+              result
+            )[0];
 
-    if (
-      from &&
-      from !== ethers.ZeroAddress &&
-      from.toLowerCase() !==
-        pair.toLowerCase()
-    ) {
-      holders.add(from);
+        return ethers
+          .decodeBytes32String(
+            bytes32
+          );
+      } catch {
+        return "UNKNOWN";
+      }
     }
-
-    if (
-      to &&
-      to !== ethers.ZeroAddress &&
-      to.toLowerCase() !==
-        pair.toLowerCase()
-    ) {
-      holders.add(to);
-    }
+  } catch {
+    return "UNKNOWN";
   }
-
-  return Array.from(holders);
 }
 
-async function pairAlreadyStored(
-  env: Env,
-  chain: string,
-  pairAddress: string
-): Promise<boolean> {
-  const key =
-    `${chain}:${pairAddress.toLowerCase()}`;
+async function getV2Reserves(
+  rpcUrl: string,
+  pair: string
+): Promise<{
+  token0_raw: string;
+  token1_raw: string;
+}> {
+  try {
+    const selector =
+      ethers.id(
+        "getReserves()"
+      ).slice(0, 10);
 
-  const existing =
-    await env.PAIRS_KV.get(key);
+    const result =
+      await rpcWithRetry(
+        rpcUrl,
+        "eth_call",
+        [
+          {
+            to: pair,
+            data: selector,
+          },
+          "latest",
+        ]
+      );
 
-  return existing !== null;
+    if (
+      typeof result !==
+        "string" ||
+      result === "0x"
+    ) {
+      return {
+        token0_raw: "0",
+        token1_raw: "0",
+      };
+    }
+
+    const decoded =
+      ethers.AbiCoder
+        .defaultAbiCoder()
+        .decode(
+          [
+            "uint112",
+            "uint112",
+            "uint32",
+          ],
+          result
+        );
+
+    return {
+      token0_raw:
+        decoded[0].toString(),
+
+      token1_raw:
+        decoded[1].toString(),
+    };
+  } catch {
+    return {
+      token0_raw: "0",
+      token1_raw: "0",
+    };
+  }
 }
 
-async function storePair(
-  env: Env,
-  chain: string,
-  pair: ParsedPair,
-  txHash: string,
-  blockNumber: number,
-  holders: string[]
-): Promise<void> {
-  const key =
-    `${chain}:${pair.pair.toLowerCase()}`;
-
-  const value = {
-    chain,
-    pair: pair.pair,
-    token0: pair.token0,
-    token1: pair.token1,
-
-    token0_raw: pair.token0,
-    token1_raw: pair.token1,
-
-    pair_index:
-      pair.pairIndex.toString(),
-
-    tx_hash: txHash,
-
-    block_number:
-      blockNumber,
-
-    holders,
-
-    detected_at:
-      new Date().toISOString(),
-  };
-
-  await env.PAIRS_KV.put(
-    key,
-    JSON.stringify(value)
-  );
-}
-
-/**
- * Verify Alchemy's HMAC SHA-256 signature.
- *
- * IMPORTANT:
- * The signature must be calculated over
- * the exact raw request body.
- */
 async function verifyAlchemySignature(
   rawBody: string,
   signature: string,
   signingKey: string
 ): Promise<boolean> {
   if (
+    !rawBody ||
     !signature ||
     !signingKey
   ) {
@@ -466,7 +478,9 @@ async function verifyAlchemySignature(
     const key =
       await crypto.subtle.importKey(
         "raw",
-        encoder.encode(signingKey),
+        encoder.encode(
+          signingKey
+        ),
         {
           name: "HMAC",
           hash: "SHA-256",
@@ -479,7 +493,9 @@ async function verifyAlchemySignature(
       await crypto.subtle.sign(
         "HMAC",
         key,
-        encoder.encode(rawBody)
+        encoder.encode(
+          rawBody
+        )
       );
 
     const calculated =
@@ -496,8 +512,10 @@ async function verifyAlchemySignature(
         )
         .join("");
 
-    return calculated ===
-      signature.toLowerCase();
+    return (
+      calculated.toLowerCase() ===
+      signature.toLowerCase()
+    );
   } catch {
     return false;
   }
@@ -505,40 +523,45 @@ async function verifyAlchemySignature(
 
 export async function handleWebhook(
   payload: WebhookPayload,
-  env: Env
+  env: WebhookEnv
 ): Promise<Response> {
   const block =
-    getBlockAndLogs(payload);
-
-  if (!block) {
-    console.log(
-      "Webhook received without a block"
+    getBlockAndLogs(
+      payload
     );
 
-    return jsonResponse({
-      ok: true,
-      processed: 0,
-      reason: "no_block",
-    });
+  if (!block) {
+    return jsonResponse(
+      {
+        ok: true,
+        processed: 0,
+        reason:
+          "no_block",
+      },
+      200
+    );
   }
 
   const blockNumber =
-    Number(block.number ?? 0);
-
-  if (
-    !Number.isFinite(blockNumber) ||
-    blockNumber <= 0
-  ) {
-    console.log(
-      "Webhook received with invalid block number"
+    Number(
+      block.number ?? 0
     );
 
-    return jsonResponse({
-      ok: true,
-      processed: 0,
-      reason:
-        "invalid_block_number",
-    });
+  if (
+    !Number.isFinite(
+      blockNumber
+    ) ||
+    blockNumber <= 0
+  ) {
+    return jsonResponse(
+      {
+        ok: false,
+        processed: 0,
+        reason:
+          "invalid_block_number",
+      },
+      400
+    );
   }
 
   const logs =
@@ -547,7 +570,14 @@ export async function handleWebhook(
   let processed = 0;
   let candidates = 0;
 
-  for (const log of logs) {
+  const store =
+    new KVStoreImpl(
+      env.PAIRS_KV
+    );
+
+  for (
+    const log of logs
+  ) {
     const factory =
       getLogAddress(log);
 
@@ -586,144 +616,184 @@ export async function handleWebhook(
     const rpcUrl =
       RPCS[chain];
 
-    if (!rpcUrl) {
-      continue;
-    }
+    const key =
+      pairKey(
+        chain,
+        parsed.pair
+      );
 
     try {
-      const alreadyStored =
-        await pairAlreadyStored(
-          env,
-          chain,
-          parsed.pair
-        );
-
-      if (alreadyStored) {
-        console.log(
-          `Pair already stored: ${parsed.pair}`
-        );
+      if (
+        await store.isDuplicate(
+          key
+        )
+      ) {
         continue;
       }
-    } catch {
+    } catch (error) {
       console.warn(
-        "KV deduplication check failed"
+        `KV deduplication failed for ${key}:`,
+        error
       );
       continue;
     }
 
-    let receipt: any;
-
     try {
-      receipt =
+      const receipt =
         await getReceipt(
           rpcUrl,
           txHash
         );
-    } catch {
-      console.warn(
-        `Receipt lookup failed: ${txHash}`
-      );
-      continue;
-    }
 
-    if (!receipt) {
-      console.warn(
-        `Receipt not found: ${txHash}`
-      );
-      continue;
-    }
+      if (!receipt) {
+        console.warn(
+          `Receipt not found: ${txHash}`
+        );
+        continue;
+      }
 
-    if (
-      receipt.status !== "0x1" &&
-      receipt.status !== 1
-    ) {
-      console.warn(
-        `Transaction reverted: ${txHash}`
-      );
-      continue;
-    }
+      if (
+        receipt.status !==
+          "0x1" &&
+        receipt.status !== 1
+      ) {
+        console.warn(
+          `Transaction reverted: ${txHash}`
+        );
+        continue;
+      }
 
-    if (
-      receipt.transactionHash &&
-      receipt.transactionHash.toLowerCase() !==
-        txHash.toLowerCase()
-    ) {
-      console.warn(
-        `Receipt hash mismatch: ${txHash}`
-      );
-      continue;
-    }
+      if (
+        receipt.transactionHash &&
+        receipt.transactionHash
+          .toLowerCase() !==
+          txHash.toLowerCase()
+      ) {
+        console.warn(
+          `Receipt hash mismatch: ${txHash}`
+        );
+        continue;
+      }
 
-    let code: string;
-
-    try {
-      code =
+      const code =
         await getCode(
           rpcUrl,
           parsed.pair
         );
-    } catch {
-      console.warn(
-        `Contract code lookup failed: ${parsed.pair}`
-      );
-      continue;
-    }
 
-    if (
-      !code ||
-      code === "0x" ||
-      code.length <= 2
-    ) {
-      console.warn(
-        `Pair has no contract code: ${parsed.pair}`
-      );
-      continue;
-    }
+      if (
+        !code ||
+        code === "0x" ||
+        code.length <= 2
+      ) {
+        console.warn(
+          `Pair has no contract code: ${parsed.pair}`
+        );
+        continue;
+      }
 
-    const holders =
-      extractInitialHolders(
-        receipt,
-        parsed.token0,
-        parsed.token1,
-        parsed.pair
-      );
+      const [
+        symbol0,
+        symbol1,
+        liquidity,
+      ] =
+        await Promise.all([
+          getTokenSymbol(
+            rpcUrl,
+            parsed.token0
+          ),
+          getTokenSymbol(
+            rpcUrl,
+            parsed.token1
+          ),
+          getV2Reserves(
+            rpcUrl,
+            parsed.pair
+          ),
+        ]);
 
-    const uniqueHolders =
-      Array.from(
-        new Set(
-          holders.map(
-            (address) =>
-              address.toLowerCase()
+      const holders =
+        extractInitialHoldersFromReceipt(
+          receipt,
+          parsed.token0,
+          parsed.token1,
+          parsed.pair
+        );
+
+      const uniqueHolders =
+        Array.from(
+          new Set(
+            holders.map(
+              (address) =>
+                address.toLowerCase()
+            )
           )
-        )
-      );
+        );
 
-    try {
-      await storePair(
-        env,
-        chain,
-        parsed,
-        txHash,
-        blockNumber,
-        uniqueHolders
+      const pair:
+        NewPair = {
+        pair_address:
+          ethers.getAddress(
+            parsed.pair
+          ),
+
+        factory:
+          ethers.getAddress(
+            factory
+          ),
+
+        tokens: [
+          {
+            address:
+              ethers.getAddress(
+                parsed.token0
+              ),
+            symbol:
+              symbol0,
+          },
+          {
+            address:
+              ethers.getAddress(
+                parsed.token1
+              ),
+            symbol:
+              symbol1,
+          },
+        ],
+
+        init_liquidity:
+          liquidity,
+
+        top_holders:
+          uniqueHolders,
+
+        created_at:
+          new Date().toISOString(),
+
+        block_number:
+          blockNumber,
+
+        tx_hash:
+          txHash,
+      };
+
+      await store.write(
+        key,
+        pair
       );
 
       processed++;
 
       console.log(
-        `Pair stored: ${parsed.pair} | holders: ${uniqueHolders.length}`
+        `Pair stored: ${key} | holders=${uniqueHolders.length}`
       );
-    } catch {
+    } catch (error) {
       console.warn(
-        `KV storage failed: ${parsed.pair}`
+        `Failed processing pair ${parsed.pair}:`,
+        error
       );
-      continue;
     }
   }
-
-  console.log(
-    `Webhook processed | block=${blockNumber} | candidates=${candidates} | stored=${processed}`
-  );
 
   return jsonResponse({
     ok: true,
@@ -734,102 +804,79 @@ export async function handleWebhook(
   });
 }
 
-export default {
-  async fetch(
-    request: Request,
-    env: Env
-  ): Promise<Response> {
-    if (
-      request.method !== "POST"
-    ) {
-      return jsonResponse({
-        ok: true,
-        service:
-          "agent-bounties",
-      });
-    }
+export async function handleSignedWebhook(
+  request: Request,
+  env: WebhookEnv
+): Promise<Response> {
+  const signingKey =
+    env.ALCHEMY_SIGNING_KEY;
 
-    const signingKey =
-      env.ALCHEMY_SIGNING_KEY;
+  if (!signingKey) {
+    console.error(
+      "ALCHEMY_SIGNING_KEY is not configured"
+    );
 
-    if (!signingKey) {
-      console.error(
-        "ALCHEMY_SIGNING_KEY is not configured"
-      );
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          "webhook_security_not_configured",
+      },
+      500
+    );
+  }
 
-      return jsonResponse(
-        {
-          ok: false,
-          error:
-            "webhook_security_not_configured",
-        },
-        500
-      );
-    }
+  const rawBody =
+    await request.text();
 
-    const rawBody =
-      await request.text();
+  const signature =
+    request.headers.get(
+      "x-alchemy-signature"
+    );
 
-    const signature =
-      request.headers.get(
-        "x-alchemy-signature"
-      );
+  if (
+    !signature ||
+    !(await verifyAlchemySignature(
+      rawBody,
+      signature,
+      signingKey
+    ))
+  ) {
+    console.warn(
+      "Rejected webhook: invalid Alchemy signature"
+    );
 
-    if (
-      !signature ||
-      !(await verifyAlchemySignature(
-        rawBody,
-        signature,
-        signingKey
-      ))
-    ) {
-      console.warn(
-        "Rejected webhook: invalid Alchemy signature"
-      );
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          "invalid_signature",
+      },
+      401
+    );
+  }
 
-      return jsonResponse(
-        {
-          ok: false,
-          error:
-            "invalid_signature",
-        },
-        401
-      );
-    }
+  let payload:
+    WebhookPayload;
 
-    try {
-      const payload =
-        JSON.parse(
-          rawBody
-        ) as WebhookPayload;
+  try {
+    payload =
+      JSON.parse(
+        rawBody
+      ) as WebhookPayload;
+  } catch {
+    return jsonResponse(
+      {
+        ok: false,
+        error:
+          "invalid_json",
+      },
+      400
+    );
+  }
 
-      return handleWebhook(
-        payload,
-        env
-      );
-    } catch {
-      console.warn(
-        "Webhook contained invalid JSON"
-      );
-
-      return jsonResponse(
-        {
-          ok: false,
-          error:
-            "invalid_json",
-        },
-        400
-      );
-    }
-  },
-
-  async scheduled(
-    _event: ScheduledEvent,
-    _env: Env,
-    _ctx: ExecutionContext
-  ): Promise<void> {
-    // Intentionally paused.
-    // Webhook pipeline is the active ingestion path.
-    return;
-  },
-};
+  return handleWebhook(
+    payload,
+    env
+  );
+}
