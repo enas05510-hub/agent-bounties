@@ -19,7 +19,7 @@ import {
   KVStoreImpl,
 } from "./kv";
 
-import { handleWebhook } from "./webhook";
+import { handleWebhook } from "./webhook-handler";
 import { handleCron } from "./scanner";
 
 interface Env {
