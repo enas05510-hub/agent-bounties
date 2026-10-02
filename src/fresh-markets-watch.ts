@@ -14,16 +14,13 @@ import {
 
 import { isSupportedChain } from "./chains";
 
-import {
-  KVNamespaceLike,
-  KVStoreImpl,
-} from "./kv";
+import { KVStoreImpl } from "./kv";
 
 import { handleWebhook } from "./webhook-handler";
 import { handleCron } from "./scanner";
 
 interface Env {
-  PAIRS_KV: KVNamespaceLike;
+  PAIRS_KV: KVNamespace;
   PAY_TO?: string;
   X402_NETWORK?: string;
   X402_PRICE?: string;
@@ -156,7 +153,7 @@ async function getLatestBlock(
 }
 
 async function updateHealth(
-  kv: KVNamespaceLike,
+  kv: KVNamespace,
   field: "last_webhook" | "last_cron"
 ): Promise<void> {
   const current =
@@ -180,7 +177,7 @@ async function updateHealth(
 }
 
 async function getHealth(
-  kv: KVNamespaceLike
+  kv: KVNamespace
 ): Promise<{
   last_webhook: string | null;
   last_cron: string | null;
@@ -238,12 +235,6 @@ function createX402Middleware(
       facilitator
     );
 
-  /*
-   * Deliberately use the literal here.
-   * This prevents Cloudflare's generated
-   * environment type from widening the value
-   * to plain string.
-   */
   resourceServer.register(
     "eip155:84532",
     new ExactEvmScheme()
@@ -329,13 +320,17 @@ app.post(
   "/webhook",
   async (c) => {
     try {
+      const payload =
+        await c.req.json();
+
       const response =
-  await handleWebhook(
-    await c.req.json(),
-    {
-      PAIRS_KV: c.env.PAIRS_KV,
-    }
-  );
+        await handleWebhook(
+          payload,
+          {
+            PAIRS_KV:
+              c.env.PAIRS_KV,
+          }
+        );
 
       await updateHealth(
         c.env.PAIRS_KV,
