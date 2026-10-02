@@ -14,7 +14,9 @@ import {
 
 import { isSupportedChain } from "./chains";
 
-import { KVStoreImpl } from "./kv";
+import {
+  KVStoreImpl,
+} from "./kv";
 
 import { handleWebhook } from "./webhook-handler";
 import { handleCron } from "./scanner";
