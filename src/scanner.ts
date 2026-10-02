@@ -1,22 +1,64 @@
 import { ethers } from "ethers";
-import { ChainName } from "./types";
-import { CHAINS } from "./chains";
 
-const ZERO_ADDRESS =
-  "0x0000000000000000000000000000000000000000";
+import {
+  ChainName,
+  NewPair,
+} from "./types";
 
-const TRANSFER_TOPIC = ethers.id(
-  "Transfer(address,address,uint256)"
-);
+import {
+  CHAINS,
+} from "./chains";
 
-const MAX_HOLDERS = 10;
+import {
+  KVStoreImpl,
+  pairKey,
+} from "./kv";
 
-export interface HolderExtractionInput {
-  tx_hash: string;
-  chain: ChainName;
-  pair_address: string;
-  token0: string;
-  token1: string;
+import {
+  extractInitialHolders,
+} from "./holders";
+
+const PAIR_CREATED_TOPIC =
+  "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
+
+const V3_POOL_CREATED_TOPIC =
+  "0x783cca1c0412dd0d695e784568c96ea0e9b7d9c5f6a7a5a0f5e0a7f7f8a8f8";
+
+const MAX_BLOCK_RANGE = 2000;
+const MAX_PAIRS_PER_RUN = 100;
+
+const V2_FACTORIES: Record<
+  ChainName,
+  string[]
+> = {
+  ethereum: [
+    "0x5C69bEe701ef814a2B6a3EDD4B1652CB9cc5aA6f",
+  ],
+
+  bsc: [
+    "0xcA143Ce32Fe78f1f7019d7d551a6402fC5350c73",
+  ],
+};
+
+const V3_FACTORIES: Record<
+  ChainName,
+  string[]
+> = {
+  ethereum: [
+    "0x1F98431c8aD98523631AE4a59f267346ea31F984",
+  ],
+
+  bsc: [
+    "0x0BFbCF9fa4f9C56B0F40a671Ad40E0805A091865",
+  ],
+};
+
+function getProvider(
+  chain: ChainName
+): ethers.JsonRpcProvider {
+  return new ethers.JsonRpcProvider(
+    CHAINS[chain].rpc_url
+  );
 }
 
 function normalizeAddress(
@@ -28,184 +70,683 @@ function normalizeAddress(
 function topicToAddress(
   topic: string
 ): string {
-  if (!topic || topic.length < 40) {
-    throw new Error("Invalid indexed address topic");
-  }
-
   return normalizeAddress(
     `0x${topic.slice(-40)}`
   );
 }
 
-function getProvider(
-  chain: ChainName
-): ethers.JsonRpcProvider {
-  return new ethers.JsonRpcProvider(
-    CHAINS[chain].rpc_url
-  );
-}
-
-function addHolder(
-  holders: Set<string>,
-  address: string,
-  pairAddress?: string
-): void {
-  const normalized =
-    normalizeAddress(address);
-
-  if (
-    normalized.toLowerCase() ===
-    ZERO_ADDRESS.toLowerCase()
-  ) {
-    return;
-  }
-
-  if (
-    pairAddress &&
-    normalized.toLowerCase() ===
-      pairAddress.toLowerCase()
-  ) {
-    return;
-  }
-
-  holders.add(normalized);
-}
-
-export function extractInitialHoldersFromReceipt(
-  receipt: any,
-  token0Input: string,
-  token1Input: string,
-  pairAddressInput: string
-): string[] {
+async function getTokenSymbol(
+  provider: ethers.JsonRpcProvider,
+  token: string
+): Promise<string> {
   try {
-    const token0 =
-      normalizeAddress(token0Input);
+    const contract =
+      new ethers.Contract(
+        token,
+        [
+          "function symbol() view returns (string)",
+        ],
+        provider
+      );
 
-    const token1 =
-      normalizeAddress(token1Input);
+    return await contract.symbol();
+  } catch {
+    return "UNKNOWN";
+  }
+}
 
-    const pairAddress =
-      normalizeAddress(pairAddressInput);
+async function getV2Liquidity(
+  provider: ethers.JsonRpcProvider,
+  pair: string
+): Promise<{
+  token0_raw: string;
+  token1_raw: string;
+}> {
+  try {
+    const contract =
+      new ethers.Contract(
+        pair,
+        [
+          "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
+        ],
+        provider
+      );
 
-    const holders =
-      new Set<string>();
+    const reserves =
+      await contract.getReserves();
 
-    const logs =
-      receipt?.logs ?? [];
+    return {
+      token0_raw:
+        reserves[0].toString(),
 
-    for (const log of logs) {
-      try {
-        if (
-          !Array.isArray(log.topics) ||
-          log.topics.length < 3
-        ) {
-          continue;
-        }
+      token1_raw:
+        reserves[1].toString(),
+    };
+  } catch {
+    return {
+      token0_raw: "0",
+      token1_raw: "0",
+    };
+  }
+}
 
-        if (
-          log.topics[0]?.toLowerCase() !==
-          TRANSFER_TOPIC.toLowerCase()
-        ) {
-          continue;
-        }
-
-        const tokenAddress =
-          normalizeAddress(log.address);
-
-        if (
-          tokenAddress.toLowerCase() !==
-            token0.toLowerCase() &&
-          tokenAddress.toLowerCase() !==
-            token1.toLowerCase()
-        ) {
-          continue;
-        }
-
-        const from =
-          topicToAddress(log.topics[1]);
-
-        const to =
-          topicToAddress(log.topics[2]);
-
-        /*
-         * Initial holder:
-         * token was minted from zero address.
-         */
-        if (
-          from.toLowerCase() !==
-          ZERO_ADDRESS.toLowerCase()
-        ) {
-          continue;
-        }
-
-        addHolder(
-          holders,
-          to,
-          pairAddress
-        );
-
-        if (
-          holders.size >= MAX_HOLDERS
-        ) {
-          break;
-        }
-      } catch {
-        // Ignore malformed individual logs.
-      }
+async function processV2Event(
+  provider: ethers.JsonRpcProvider,
+  store: KVStoreImpl,
+  chain: ChainName,
+  log: ethers.Log
+): Promise<boolean> {
+  try {
+    if (
+      log.topics.length < 3
+    ) {
+      return false;
     }
 
-    return Array.from(holders)
-      .slice(0, MAX_HOLDERS);
-  } catch (error) {
-    console.warn(
-      "Failed to extract holders from receipt:",
-      error
-    );
+    if (
+      log.topics[0]?.toLowerCase() !==
+      PAIR_CREATED_TOPIC.toLowerCase()
+    ) {
+      return false;
+    }
 
-    return [];
-  }
-}
+    const token0 =
+      topicToAddress(
+        log.topics[1]
+      );
 
-/*
- * Cron and webhook intentionally use
- * the exact same holder extraction logic.
- *
- * No additional eth_getTransactionByHash call
- * is performed here. This keeps the scanner
- * lightweight and avoids unnecessary RPC usage.
- */
-export async function extractInitialHolders(
-  input: HolderExtractionInput
-): Promise<string[]> {
-  try {
-    const provider =
-      getProvider(input.chain);
+    const token1 =
+      topicToAddress(
+        log.topics[2]
+      );
+
+    const decoded =
+      ethers.AbiCoder
+        .defaultAbiCoder()
+        .decode(
+          [
+            "address",
+            "uint256",
+          ],
+          log.data
+        );
+
+    const pair =
+      normalizeAddress(
+        decoded[0]
+      );
+
+    const txHash =
+      log.transactionHash;
+
+    const key =
+      pairKey(
+        chain,
+        pair
+      );
+
+    if (
+      await store.isDuplicate(
+        key
+      )
+    ) {
+      return false;
+    }
 
     const receipt =
       await provider.getTransactionReceipt(
-        input.tx_hash
+        txHash
       );
 
     if (!receipt) {
-      console.warn(
-        `Transaction receipt not found: ${input.tx_hash}`
-      );
-
-      return [];
+      return false;
     }
 
-    return extractInitialHoldersFromReceipt(
-      receipt,
-      input.token0,
-      input.token1,
-      input.pair_address
+    if (
+      receipt.status !== 1
+    ) {
+      return false;
+    }
+
+    const code =
+      await provider.getCode(
+        pair
+      );
+
+    if (
+      !code ||
+      code === "0x"
+    ) {
+      return false;
+    }
+
+    const [
+      symbol0,
+      symbol1,
+      liquidity,
+      holders,
+      block,
+    ] =
+      await Promise.all([
+        getTokenSymbol(
+          provider,
+          token0
+        ),
+
+        getTokenSymbol(
+          provider,
+          token1
+        ),
+
+        getV2Liquidity(
+          provider,
+          pair
+        ),
+
+        extractInitialHolders({
+          tx_hash:
+            txHash,
+
+          chain,
+
+          pair_address:
+            pair,
+
+          token0,
+
+          token1,
+        }),
+
+        provider.getBlock(
+          log.blockNumber
+        ),
+      ]);
+
+    const newPair: NewPair = {
+      pair_address:
+        pair,
+
+      factory:
+        normalizeAddress(
+          log.address
+        ),
+
+      tokens: [
+        {
+          address:
+            token0,
+
+          symbol:
+            symbol0,
+        },
+
+        {
+          address:
+            token1,
+
+          symbol:
+            symbol1,
+        },
+      ],
+
+      init_liquidity:
+        liquidity,
+
+      top_holders:
+        holders,
+
+      created_at:
+        block
+          ? new Date(
+              Number(
+                block.timestamp
+              ) * 1000
+            ).toISOString()
+          : new Date()
+              .toISOString(),
+
+      block_number:
+        log.blockNumber,
+
+      tx_hash:
+        txHash,
+    };
+
+    await store.write(
+      key,
+      newPair
     );
+
+    console.log(
+      `Stored V2 pair ${pair} on ${chain}`
+    );
+
+    return true;
   } catch (error) {
     console.warn(
-      `Failed to extract holders for ${input.tx_hash}:`,
+      `Failed processing V2 event on ${chain}:`,
       error
     );
 
-    return [];
+    return false;
   }
+}
+
+async function processV3Event(
+  provider: ethers.JsonRpcProvider,
+  store: KVStoreImpl,
+  chain: ChainName,
+  log: ethers.Log
+): Promise<boolean> {
+  try {
+    if (
+      log.topics.length < 4
+    ) {
+      return false;
+    }
+
+    if (
+      log.topics[0]?.toLowerCase() !==
+      V3_POOL_CREATED_TOPIC.toLowerCase()
+    ) {
+      return false;
+    }
+
+    const token0 =
+      topicToAddress(
+        log.topics[1]
+      );
+
+    const token1 =
+      topicToAddress(
+        log.topics[2]
+      );
+
+    const decoded =
+      ethers.AbiCoder
+        .defaultAbiCoder()
+        .decode(
+          [
+            "int24",
+            "address",
+            "uint256",
+          ],
+          log.data
+        );
+
+    /*
+     * V3 PoolCreated event layout:
+     *
+     * token0
+     * token1
+     * fee
+     * tickSpacing
+     * pool
+     *
+     * The pool address is the final
+     * indexed/non-indexed value depending
+     * on decoded representation.
+     *
+     * If decoding does not expose a valid
+     * pool address, skip safely.
+     */
+    let pool: string | null = null;
+
+    try {
+      const parsed =
+        ethers.AbiCoder
+          .defaultAbiCoder()
+          .decode(
+            [
+              "uint24",
+              "int24",
+              "address",
+            ],
+            log.data
+          );
+
+      pool =
+        normalizeAddress(
+          parsed[2]
+        );
+    } catch {
+      pool = null;
+    }
+
+    if (!pool) {
+      return false;
+    }
+
+    const txHash =
+      log.transactionHash;
+
+    const key =
+      pairKey(
+        chain,
+        pool
+      );
+
+    if (
+      await store.isDuplicate(
+        key
+      )
+    ) {
+      return false;
+    }
+
+    const receipt =
+      await provider.getTransactionReceipt(
+        txHash
+      );
+
+    if (!receipt) {
+      return false;
+    }
+
+    if (
+      receipt.status !== 1
+    ) {
+      return false;
+    }
+
+    const code =
+      await provider.getCode(
+        pool
+      );
+
+    if (
+      !code ||
+      code === "0x"
+    ) {
+      return false;
+    }
+
+    const [
+      symbol0,
+      symbol1,
+      holders,
+      block,
+    ] =
+      await Promise.all([
+        getTokenSymbol(
+          provider,
+          token0
+        ),
+
+        getTokenSymbol(
+          provider,
+          token1
+        ),
+
+        extractInitialHolders({
+          tx_hash:
+            txHash,
+
+          chain,
+
+          pair_address:
+            pool,
+
+          token0,
+
+          token1,
+        }),
+
+        provider.getBlock(
+          log.blockNumber
+        ),
+      ]);
+
+    const newPair: NewPair = {
+      pair_address:
+        pool,
+
+      factory:
+        normalizeAddress(
+          log.address
+        ),
+
+      tokens: [
+        {
+          address:
+            token0,
+
+          symbol:
+            symbol0,
+        },
+
+        {
+          address:
+            token1,
+
+          symbol:
+            symbol1,
+        },
+      ],
+
+      init_liquidity: {
+        token0_raw:
+          "0",
+
+        token1_raw:
+          "0",
+      },
+
+      top_holders:
+        holders,
+
+      created_at:
+        block
+          ? new Date(
+              Number(
+                block.timestamp
+              ) * 1000
+            ).toISOString()
+          : new Date()
+              .toISOString(),
+
+      block_number:
+        log.blockNumber,
+
+      tx_hash:
+        txHash,
+    };
+
+    await store.write(
+      key,
+      newPair
+    );
+
+    console.log(
+      `Stored V3 pool ${pool} on ${chain}`
+    );
+
+    return true;
+  } catch (error) {
+    console.warn(
+      `Failed processing V3 event on ${chain}:`,
+      error
+    );
+
+    return false;
+  }
+}
+
+async function scanRange(
+  provider: ethers.JsonRpcProvider,
+  store: KVStoreImpl,
+  chain: ChainName,
+  fromBlock: number,
+  toBlock: number
+): Promise<number> {
+  let processed = 0;
+
+  const v2Logs =
+    await provider.getLogs({
+      address:
+        V2_FACTORIES[chain],
+
+      topics: [
+        PAIR_CREATED_TOPIC,
+      ],
+
+      fromBlock,
+
+      toBlock,
+    });
+
+  for (const log of v2Logs) {
+    if (
+      processed >=
+      MAX_PAIRS_PER_RUN
+    ) {
+      break;
+    }
+
+    if (
+      await processV2Event(
+        provider,
+        store,
+        chain,
+        log
+      )
+    ) {
+      processed++;
+    }
+  }
+
+  if (
+    processed <
+    MAX_PAIRS_PER_RUN
+  ) {
+    const v3Logs =
+      await provider.getLogs({
+        address:
+          V3_FACTORIES[chain],
+
+        topics: [
+          V3_POOL_CREATED_TOPIC,
+        ],
+
+        fromBlock,
+
+        toBlock,
+      });
+
+    for (const log of v3Logs) {
+      if (
+        processed >=
+        MAX_PAIRS_PER_RUN
+      ) {
+        break;
+      }
+
+      if (
+        await processV3Event(
+          provider,
+          store,
+          chain,
+          log
+        )
+      ) {
+        processed++;
+      }
+    }
+  }
+
+  return processed;
+}
+
+export async function handleCron(
+  kv: KVNamespace
+): Promise<void> {
+  const store =
+    new KVStoreImpl(kv);
+
+  let totalProcessed = 0;
+
+  const chains:
+    ChainName[] = [
+      "ethereum",
+      "bsc",
+    ];
+
+  for (const chain of chains) {
+    if (
+      totalProcessed >=
+      MAX_PAIRS_PER_RUN
+    ) {
+      break;
+    }
+
+    try {
+      const provider =
+        getProvider(chain);
+
+      const latestBlock =
+        await provider.getBlockNumber();
+
+      const blocksPerMinute =
+        CHAINS[chain]
+          .blocks_per_minute;
+
+      const scanBlocks =
+        Math.max(
+          1,
+          Math.ceil(
+            10 *
+              blocksPerMinute
+          )
+        );
+
+      const fromBlock =
+        Math.max(
+          0,
+          latestBlock -
+            scanBlocks
+        );
+
+      let cursor =
+        fromBlock;
+
+      while (
+        cursor <=
+          latestBlock &&
+        totalProcessed <
+          MAX_PAIRS_PER_RUN
+      ) {
+        const end =
+          Math.min(
+            latestBlock,
+            cursor +
+              MAX_BLOCK_RANGE -
+              1
+          );
+
+        const processed =
+          await scanRange(
+            provider,
+            store,
+            chain,
+            cursor,
+            end
+          );
+
+        totalProcessed +=
+          processed;
+
+        cursor =
+          end + 1;
+      }
+    } catch (error) {
+      console.warn(
+        `Cron scan failed for ${chain}:`,
+        error
+      );
+    }
+  }
+
+  console.log(
+    `Cron scan completed: ${totalProcessed} pairs processed`
+  );
 }
