@@ -185,7 +185,7 @@ return {
   pair,
   pairIndex,
 };
-```
+
 
 } catch {
 return null;
@@ -288,7 +288,7 @@ log.topics.length < 3
 continue;
 }
 
-```
+
 if (
   log.topics[0]?.toLowerCase() !==
   TRANSFER_TOPIC.toLowerCase()
@@ -353,7 +353,7 @@ if (
 ) {
   holders.add(to);
 }
-```
+
 
 }
 
@@ -446,4 +446,4 @@ const parsed =
   extractPair(log);
 
 if (!par
-```
+
