@@ -330,10 +330,12 @@ app.post(
   async (c) => {
     try {
       const response =
-        await handleWebhook(
-          c.req.raw,
-          c.env.PAIRS_KV
-        );
+  await handleWebhook(
+    await c.req.json(),
+    {
+      PAIRS_KV: c.env.PAIRS_KV,
+    }
+  );
 
       await updateHealth(
         c.env.PAIRS_KV,
