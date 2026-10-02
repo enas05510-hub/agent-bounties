@@ -6,11 +6,14 @@ import {
   NewPair,
 } from "./types";
 
-import { CHAINS } from "./chains";
+import {
+  CHAINS,
+} from "./chains";
 
 import {
   KVNamespaceLike,
   KVStoreImpl,
+  pairKey,
 } from "./kv";
 
 import {
@@ -27,13 +30,15 @@ const V3_FACTORY_INTERFACE =
     "event PoolCreated(address indexed token0,address indexed token1,uint24 indexed fee,int24 tickSpacing,address pool)",
   ]);
 
-const PAIR_CREATED_TOPIC = ethers.id(
-  "PairCreated(address,address,address,uint256)"
-);
+const PAIR_CREATED_TOPIC =
+  ethers.id(
+    "PairCreated(address,address,address,uint256)"
+  );
 
-const POOL_CREATED_TOPIC = ethers.id(
-  "PoolCreated(address,address,uint24,int24,address)"
-);
+const POOL_CREATED_TOPIC =
+  ethers.id(
+    "PoolCreated(address,address,uint24,int24,address)"
+  );
 
 const MAX_BLOCK_RANGE = 2000;
 const MAX_PAIRS_PER_RUN = 100;
@@ -129,6 +134,7 @@ async function getV2Reserves(
     return {
       token0_raw:
         reserves[0].toString(),
+
       token1_raw:
         reserves[1].toString(),
     };
@@ -170,22 +176,33 @@ async function parseV2Factory(
   const logs =
     await provider.getLogs({
       address: factory,
+
       topics: [
         PAIR_CREATED_TOPIC,
       ],
+
       fromBlock,
+
       toBlock,
     });
 
-  const events: FactoryEvent[] = [];
+  const events:
+    FactoryEvent[] = [];
 
-  for (const log of logs) {
+  for (
+    const log of logs
+  ) {
     try {
       const parsed =
-        V2_FACTORY_INTERFACE.parseLog({
-          topics: log.topics,
-          data: log.data,
-        });
+        V2_FACTORY_INTERFACE.parseLog(
+          {
+            topics:
+              log.topics,
+
+            data:
+              log.data,
+          }
+        );
 
       if (!parsed) {
         continue;
@@ -193,29 +210,44 @@ async function parseV2Factory(
 
       const token0 =
         ethers.getAddress(
-          String(parsed.args[0])
+          String(
+            parsed.args[0]
+          )
         );
 
       const token1 =
         ethers.getAddress(
-          String(parsed.args[1])
+          String(
+            parsed.args[1]
+          )
         );
 
       const pair =
         ethers.getAddress(
-          String(parsed.args[2])
+          String(
+            parsed.args[2]
+          )
         );
 
       events.push({
         factory:
-          ethers.getAddress(factory),
+          ethers.getAddress(
+            factory
+          ),
+
         token0,
+
         token1,
-        pair_address: pair,
+
+        pair_address:
+          pair,
+
         tx_hash:
           log.transactionHash,
+
         block_number:
           log.blockNumber,
+
         isV3: false,
       });
     } catch (error) {
@@ -238,22 +270,33 @@ async function parseV3Factory(
   const logs =
     await provider.getLogs({
       address: factory,
+
       topics: [
         POOL_CREATED_TOPIC,
       ],
+
       fromBlock,
+
       toBlock,
     });
 
-  const events: FactoryEvent[] = [];
+  const events:
+    FactoryEvent[] = [];
 
-  for (const log of logs) {
+  for (
+    const log of logs
+  ) {
     try {
       const parsed =
-        V3_FACTORY_INTERFACE.parseLog({
-          topics: log.topics,
-          data: log.data,
-        });
+        V3_FACTORY_INTERFACE.parseLog(
+          {
+            topics:
+              log.topics,
+
+            data:
+              log.data,
+          }
+        );
 
       if (!parsed) {
         continue;
@@ -261,29 +304,44 @@ async function parseV3Factory(
 
       const token0 =
         ethers.getAddress(
-          String(parsed.args[0])
+          String(
+            parsed.args[0]
+          )
         );
 
       const token1 =
         ethers.getAddress(
-          String(parsed.args[1])
+          String(
+            parsed.args[1]
+          )
         );
 
       const pool =
         ethers.getAddress(
-          String(parsed.args[4])
+          String(
+            parsed.args[4]
+          )
         );
 
       events.push({
         factory:
-          ethers.getAddress(factory),
+          ethers.getAddress(
+            factory
+          ),
+
         token0,
+
         token1,
-        pair_address: pool,
+
+        pair_address:
+          pool,
+
         tx_hash:
           log.transactionHash,
+
         block_number:
           log.blockNumber,
+
         isV3: true,
       });
     } catch (error) {
@@ -303,10 +361,13 @@ async function discoverEvents(
   fromBlock: number,
   toBlock: number
 ): Promise<FactoryEvent[]> {
-  const events: FactoryEvent[] = [];
+  const events:
+    FactoryEvent[] = [];
 
   for (
-    const factory of getV2Factories(chain)
+    const factory of getV2Factories(
+      chain
+    )
   ) {
     try {
       const factoryEvents =
@@ -329,7 +390,9 @@ async function discoverEvents(
   }
 
   for (
-    const factory of getV3Factories(chain)
+    const factory of getV3Factories(
+      chain
+    )
   ) {
     try {
       const factoryEvents =
@@ -390,44 +453,51 @@ async function buildNewPair(
       liquidity,
       holders,
       block,
-    ] = await Promise.all([
-      getTokenSymbol(
-        provider,
-        event.token0
-      ),
+    ] =
+      await Promise.all([
+        getTokenSymbol(
+          provider,
+          event.token0
+        ),
 
-      getTokenSymbol(
-        provider,
-        event.token1
-      ),
+        getTokenSymbol(
+          provider,
+          event.token1
+        ),
 
-      getInitialLiquidity(
-        provider,
-        event.pair_address,
-        event.isV3
-      ),
-
-      extractInitialHolders({
-        tx_hash:
-          event.tx_hash,
-        chain,
-        pair_address:
+        getInitialLiquidity(
+          provider,
           event.pair_address,
-        token0:
-          event.token0,
-        token1:
-          event.token1,
-      }),
+          event.isV3
+        ),
 
-      provider.getBlock(
-        event.block_number
-      ),
-    ]);
+        extractInitialHolders({
+          tx_hash:
+            event.tx_hash,
+
+          chain,
+
+          pair_address:
+            event.pair_address,
+
+          token0:
+            event.token0,
+
+          token1:
+            event.token1,
+        }),
+
+        provider.getBlock(
+          event.block_number
+        ),
+      ]);
 
     const createdAt =
       block
         ? new Date(
-            Number(block.timestamp) * 1000
+            Number(
+              block.timestamp
+            ) * 1000
           ).toISOString()
         : new Date().toISOString();
 
@@ -448,7 +518,9 @@ async function buildNewPair(
             ethers.getAddress(
               event.token0
             ),
-          symbol: symbol0,
+
+          symbol:
+            symbol0,
         },
 
         {
@@ -456,7 +528,9 @@ async function buildNewPair(
             ethers.getAddress(
               event.token1
             ),
-          symbol: symbol1,
+
+          symbol:
+            symbol1,
         },
       ],
 
@@ -493,7 +567,9 @@ async function processEvents(
 ): Promise<void> {
   let processed = 0;
 
-  for (const event of events) {
+  for (
+    const event of events
+  ) {
     if (
       processed >=
       MAX_PAIRS_PER_RUN
@@ -507,13 +583,16 @@ async function processEvents(
       );
 
     const key =
-      `pair:${chain}:${normalizeAddress(
+      pairKey(
+        chain,
         pairAddress
-      )}`;
+      );
 
     try {
       if (
-        await store.isDuplicate(key)
+        await store.isDuplicate(
+          key
+        )
       ) {
         continue;
       }
@@ -560,7 +639,9 @@ export async function handleCron(
   ) {
     try {
       const provider =
-        getProvider(chain);
+        getProvider(
+          chain
+        );
 
       const latestBlock =
         await provider.getBlockNumber();
@@ -569,11 +650,16 @@ export async function handleCron(
         CHAINS[chain]
           .blocks_per_minute;
 
+      /*
+       * Keep the Cron discovery window aligned
+       * with the fresh-market purpose while avoiding
+       * unnecessarily large scans.
+       */
       const requestedFrom =
         Math.max(
           0,
           latestBlock -
-            15 *
+            10 *
               blocksPerMinute
         );
 
@@ -587,6 +673,7 @@ export async function handleCron(
         const toBlock =
           Math.min(
             latestBlock,
+
             fromBlock +
               MAX_BLOCK_RANGE -
               1
