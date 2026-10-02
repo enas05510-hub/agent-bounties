@@ -347,20 +347,19 @@ async function storePair(
 ) {
   const key =
     `${chain}:${pair.pair.toLowerCase()}`;
-
-  const value = {
-    chain,
-    pair: pair.pair,
-    token0: pair.token0,
-    token1: pair.token1,
-    token0_raw: pair.token0,
-    token1_raw: pair.token1,
-    tx_hash: txHash,
-    block_number: blockNumber,
-    holders,
-    detected_at: new Date().toISOString(),
-  };
-
+const value = {
+  chain,
+  pair: pair.pair,
+  token0: pair.token0,
+  token1: pair.token1,
+  token0_raw: pair.token0,
+  token1_raw: pair.token1,
+  pair_index: pair.pairIndex.toString(),
+  tx_hash: txHash,
+  block_number: blockNumber,
+  holders,
+  detected_at: new Date().toISOString(),
+};
   await env.PAIRS_KV.put(
     key,
     JSON.stringify(value)
