@@ -1,671 +1,518 @@
 import { ethers } from "ethers";
 
-import { CHAINS } from "./chains";
-
-import {
-  ChainName,
-  NewPair,
-} from "./types";
-
-import {
-  KVNamespaceLike,
-  KVStoreImpl,
-} from "./kv";
-
-import {
-  extractInitialHolders,
-} from "./holders";
-
-const V2_FACTORY_INTERFACE =
-  new ethers.Interface([
-    "event PairCreated(address indexed token0,address indexed token1,address pair,uint256)",
-  ]);
-
-const V3_FACTORY_INTERFACE =
-  new ethers.Interface([
-    "event PoolCreated(address indexed token0,address indexed token1,uint24 indexed fee,int24 tickSpacing,address pool)",
-  ]);
-
 const PAIR_CREATED_TOPIC =
-  ethers.id(
-    "PairCreated(address,address,address,uint256)"
-  );
+  "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
-const POOL_CREATED_TOPIC =
-  ethers.id(
-    "PoolCreated(address,address,uint24,int24,address)"
-  );
+const FACTORIES = new Set([
+  "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f", // Uniswap V2
+  "0x1f98431c8ad98523631ae4a59f267346ea31f984", // Uniswap V3
+  "0xca143ce32fe78f1f7019d7d551a6402fc5350c73", // Pancake V2
+  "0x0fbcf9fa4f9c56b0f40a671ad40e0805a091865", // Pancake V3
+]);
 
-interface AlchemyLog {
-  address?: string;
-  topics?: string[];
+const TRANSFER_TOPIC = ethers.id(
+  "Transfer(address,address,uint256)"
+);
+
+type WebhookLog = {
   data?: string;
-}
-
-interface AlchemyEvent {
+  topics?: string[];
+  account?: {
+    address?: string;
+  };
+  address?: string;
   transaction?: {
     hash?: string;
   };
+  transactionHash?: string;
+};
 
-  block?: {
-    number?: string | number;
+type WebhookPayload = {
+  event?: {
+    data?: {
+      block?: {
+        number?: number | string;
+        logs?: WebhookLog[];
+      };
+    };
   };
 
   data?: {
-    logs?: AlchemyLog[];
+    block?: {
+      number?: number | string;
+      logs?: WebhookLog[];
+    };
   };
-}
 
-interface AlchemyWebhookPayload {
-  webhookId?: string;
-  id?: string;
-  createdAt?: string;
-  type?: string;
-
-  event?: AlchemyEvent;
-
-  blockchain?: {
-    network?: string;
+  block?: {
+    number?: number | string;
+    logs?: WebhookLog[];
   };
-}
+};
 
-interface PairEvent {
-  token0: string;
-  token1: string;
-  pair_address: string;
-  tx_hash: string;
-  block_number: number;
-  factory: string;
-  isV3: boolean;
-}
+type Env = {
+  PAIRS_KV: KVNamespace;
+};
 
-function normalizeAddress(
-  address: string
-): string {
-  return ethers
-    .getAddress(address);
-}
+const RPCS: Record<string, string> = {
+  ethereum:
+    "https://eth.llamarpc.com",
+  bsc:
+    "https://bsc-dataseed.binance.org",
+};
 
-function detectChain(
-  network?: string
-): ChainName | null {
-  const value =
-    (network ?? "").toLowerCase();
+function normalizeAddress(value?: string): string | null {
+  if (!value) return null;
 
-  if (
-    value.includes("ethereum") ||
-    value.includes("eth-mainnet")
-  ) {
-    return "ethereum";
-  }
-
-  if (
-    value.includes("bsc") ||
-    value.includes("bnb")
-  ) {
-    return "bsc";
-  }
-
-  return null;
-}
-
-function getFactoryType(
-  chain: ChainName,
-  factory: string
-): {
-  isV3: boolean;
-  normalized: string;
-} | null {
   try {
-    const normalized =
-      normalizeAddress(factory);
-
-    const factories =
-      CHAINS[chain].factories;
-
-    if (
-      normalized.toLowerCase() ===
-      factories[0].toLowerCase()
-    ) {
-      return {
-        isV3: false,
-        normalized,
-      };
-    }
-
-    if (
-      normalized.toLowerCase() ===
-      factories[1].toLowerCase()
-    ) {
-      return {
-        isV3: true,
-        normalized,
-      };
-    }
-
-    return null;
+    return ethers.getAddress(value);
   } catch {
     return null;
   }
 }
 
-function parsePairEvent(
-  chain: ChainName,
-  log: AlchemyLog,
-  txHash: string,
-  blockNumber: number
-): PairEvent | null {
-  if (
-    !log.address ||
-    !log.topics ||
-    log.topics.length === 0
-  ) {
-    return null;
-  }
-
-  try {
-    const factoryInfo =
-      getFactoryType(
-        chain,
-        log.address
-      );
-
-    if (!factoryInfo) {
-      return null;
-    }
-
-    const topic =
-      log.topics[0];
-
-    if (
-      !factoryInfo.isV3 &&
-      topic !== PAIR_CREATED_TOPIC
-    ) {
-      return null;
-    }
-
-    if (
-      factoryInfo.isV3 &&
-      topic !== POOL_CREATED_TOPIC
-    ) {
-      return null;
-    }
-
-    const iface =
-      factoryInfo.isV3
-        ? V3_FACTORY_INTERFACE
-        : V2_FACTORY_INTERFACE;
-
-    const parsed =
-      iface.parseLog({
-        topics: log.topics,
-        data: log.data ?? "0x",
-      });
-
-    if (!parsed) {
-      return null;
-    }
-
-    const token0 =
-      normalizeAddress(
-        String(parsed.args[0])
-      );
-
-    const token1 =
-      normalizeAddress(
-        String(parsed.args[1])
-      );
-
-    const pairAddress =
-      factoryInfo.isV3
-        ? normalizeAddress(
-            String(parsed.args[4])
-          )
-        : normalizeAddress(
-            String(parsed.args[2])
-          );
-
-    if (
-      pairAddress ===
-      ethers.ZeroAddress
-    ) {
-      return null;
-    }
-
-    if (
-      token0 === ethers.ZeroAddress ||
-      token1 === ethers.ZeroAddress
-    ) {
-      return null;
-    }
-
-    return {
-      token0,
-      token1,
-      pair_address:
-        pairAddress,
-      tx_hash:
-        txHash,
-      block_number:
-        blockNumber,
-      factory:
-        factoryInfo.normalized,
-      isV3:
-        factoryInfo.isV3,
-    };
-  } catch (error) {
-    console.warn(
-      "Failed to parse factory event:",
-      error
-    );
-
-    return null;
-  }
-}
-
-async function getTokenSymbol(
-  provider: ethers.JsonRpcProvider,
-  token: string
-): Promise<string> {
-  try {
-    const contract =
-      new ethers.Contract(
-        token,
-        [
-          "function symbol() view returns (string)",
-        ],
-        provider
-      );
-
-    return String(
-      await contract.symbol()
-    );
-  } catch {
-    return "UNKNOWN";
-  }
-}
-
-async function getV2Reserves(
-  provider: ethers.JsonRpcProvider,
-  pair: string
-): Promise<{
-  token0_raw: string;
-  token1_raw: string;
-}> {
-  try {
-    const contract =
-      new ethers.Contract(
-        pair,
-        [
-          "function getReserves() view returns (uint112 reserve0, uint112 reserve1, uint32 blockTimestampLast)",
-        ],
-        provider
-      );
-
-    const reserves =
-      await contract.getReserves();
-
-    return {
-      token0_raw:
-        reserves[0].toString(),
-
-      token1_raw:
-        reserves[1].toString(),
-    };
-  } catch {
-    return {
-      token0_raw: "0",
-      token1_raw: "0",
-    };
-  }
-}
-
-async function getInitialLiquidity(
-  provider: ethers.JsonRpcProvider,
-  pair: string,
-  isV3: boolean
-): Promise<{
-  token0_raw: string;
-  token1_raw: string;
-}> {
-  if (isV3) {
-    return {
-      token0_raw: "0",
-      token1_raw: "0",
-    };
-  }
-
-  return getV2Reserves(
-    provider,
-    pair
+function getBlockAndLogs(payload: WebhookPayload) {
+  return (
+    payload.event?.data?.block ??
+    payload.data?.block ??
+    payload.block ??
+    null
   );
 }
 
-async function buildNewPair(
-  chain: ChainName,
-  event: PairEvent,
-  provider: ethers.JsonRpcProvider
-): Promise<NewPair | null> {
-  try {
-    const receipt =
-      await provider.getTransactionReceipt(
-        event.tx_hash
-      );
+function getLogAddress(log: WebhookLog): string | null {
+  return normalizeAddress(
+    log.account?.address ??
+      log.address
+  );
+}
 
+function getTransactionHash(log: WebhookLog): string | null {
+  return (
+    log.transaction?.hash ??
+    log.transactionHash ??
+    null
+  );
+}
+
+function extractV2Pair(
+  log: WebhookLog
+): {
+  token0: string;
+  token1: string;
+  pair: string;
+} | null {
+  const topics = log.topics ?? [];
+
+  if (topics.length < 3) {
+    return null;
+  }
+
+  if (
+    topics[0]?.toLowerCase() !==
+    PAIR_CREATED_TOPIC.toLowerCase()
+  ) {
+    return null;
+  }
+
+  const token0 = normalizeAddress(
+    ethers.getAddress(
+      ethers.dataSlice(topics[1], 12)
+    )
+  );
+
+  const token1 = normalizeAddress(
+    ethers.getAddress(
+      ethers.dataSlice(topics[2], 12)
+    )
+  );
+
+  if (!token0 || !token1) {
+    return null;
+  }
+
+  let pair: string | null = null;
+
+  if (log.data && log.data.length >= 66) {
+    try {
+      pair = normalizeAddress(
+        ethers.getAddress(
+          ethers.dataSlice(log.data, 0, 32).slice(0, 20)
+        )
+      );
+    } catch {
+      pair = null;
+    }
+  }
+
+  if (!pair && topics.length >= 4) {
+    try {
+      pair = normalizeAddress(
+        ethers.getAddress(
+          ethers.dataSlice(topics[3], 12)
+        )
+      );
+    } catch {
+      pair = null;
+    }
+  }
+
+  if (!pair) {
+    return null;
+  }
+
+  return {
+    token0,
+    token1,
+    pair,
+  };
+}
+
+async function rpc(
+  rpcUrl: string,
+  method: string,
+  params: unknown[]
+): Promise<any> {
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(
+      `RPC HTTP ${response.status}`
+    );
+  }
+
+  const json = await response.json<any>();
+
+  if (json.error) {
+    throw new Error(
+      json.error.message ??
+        "RPC request failed"
+    );
+  }
+
+  return json.result;
+}
+
+async function rpcWithRetry(
+  rpcUrl: string,
+  method: string,
+  params: unknown[]
+): Promise<any> {
+  try {
+    return await rpc(
+      rpcUrl,
+      method,
+      params
+    );
+  } catch {
+    return await rpc(
+      rpcUrl,
+      method,
+      params
+    );
+  }
+}
+
+async function getReceipt(
+  rpcUrl: string,
+  txHash: string
+) {
+  return rpcWithRetry(
+    rpcUrl,
+    "eth_getTransactionReceipt",
+    [txHash]
+  );
+}
+
+async function getCode(
+  rpcUrl: string,
+  address: string
+) {
+  return rpcWithRetry(
+    rpcUrl,
+    "eth_getCode",
+    [address, "latest"]
+  );
+}
+
+function extractInitialHolders(
+  receipt: any,
+  token0: string,
+  token1: string,
+  pair: string
+): string[] {
+  const holders = new Set<string>();
+
+  const logs = receipt?.logs ?? [];
+
+  for (const log of logs) {
     if (
-      !receipt ||
-      receipt.status !== 1
+      !Array.isArray(log.topics) ||
+      log.topics.length < 3
     ) {
-      return null;
+      continue;
     }
 
-    const code =
-      await provider.getCode(
-        event.pair_address
-      );
+    if (
+      log.topics[0]?.toLowerCase() !==
+      TRANSFER_TOPIC.toLowerCase()
+    ) {
+      continue;
+    }
+
+    const tokenAddress =
+      normalizeAddress(log.address);
+
+    if (
+      tokenAddress?.toLowerCase() !==
+        token0.toLowerCase() &&
+      tokenAddress?.toLowerCase() !==
+        token1.toLowerCase()
+    ) {
+      continue;
+    }
+
+    const from = normalizeAddress(
+      ethers.getAddress(
+        ethers.dataSlice(log.topics[1], 12)
+      )
+    );
+
+    const to = normalizeAddress(
+      ethers.getAddress(
+        ethers.dataSlice(log.topics[2], 12)
+      )
+    );
+
+    if (
+      from &&
+      from !== ethers.ZeroAddress &&
+      from.toLowerCase() !== pair.toLowerCase()
+    ) {
+      holders.add(from);
+    }
+
+    if (
+      to &&
+      to !== ethers.ZeroAddress &&
+      to.toLowerCase() !== pair.toLowerCase()
+    ) {
+      holders.add(to);
+    }
+  }
+
+  return [...holders];
+}
+
+async function storePair(
+  env: Env,
+  chain: string,
+  pair: {
+    token0: string;
+    token1: string;
+    pair: string;
+  },
+  txHash: string | null,
+  blockNumber: number,
+  holders: string[]
+) {
+  const key =
+    `${chain}:${pair.pair.toLowerCase()}`;
+
+  const value = {
+    chain,
+    pair: pair.pair,
+    token0: pair.token0,
+    token1: pair.token1,
+    token0_raw: pair.token0,
+    token1_raw: pair.token1,
+    tx_hash: txHash,
+    block_number: blockNumber,
+    holders,
+    detected_at: new Date().toISOString(),
+  };
+
+  await env.PAIRS_KV.put(
+    key,
+    JSON.stringify(value)
+  );
+}
+
+export async function handleWebhook(
+  payload: WebhookPayload,
+  env: Env
+): Promise<Response> {
+  const block = getBlockAndLogs(payload);
+
+  if (!block) {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        processed: 0,
+        reason: "no_block",
+      }),
+      {
+        headers: {
+          "content-type":
+            "application/json",
+        },
+      }
+    );
+  }
+
+  const blockNumber = Number(
+    block.number ?? 0
+  );
+
+  const logs = block.logs ?? [];
+
+  let processed = 0;
+
+  for (const log of logs) {
+    const factory =
+      getLogAddress(log);
+
+    if (
+      !factory ||
+      !FACTORIES.has(
+        factory.toLowerCase()
+      )
+    ) {
+      continue;
+    }
+
+    const parsed =
+      extractV2Pair(log);
+
+    if (!parsed) {
+      continue;
+    }
+
+    const txHash =
+      getTransactionHash(log);
+
+    if (!txHash) {
+      continue;
+    }
+
+    const isBscFactory =
+      factory.toLowerCase() ===
+        "0xca143ce32fe78f1f7019d7d551a6402fc5350c73" ||
+      factory.toLowerCase() ===
+        "0x0fbcf9fa4f9c56b0f40a671ad40e0805a091865";
+
+    const chain =
+      isBscFactory
+        ? "bsc"
+        : "ethereum";
+
+    const rpcUrl =
+      RPCS[chain];
+
+    if (!rpcUrl) {
+      continue;
+    }
+
+    const key =
+      `${chain}:${parsed.pair.toLowerCase()}`;
+
+    const existing =
+      await env.PAIRS_KV.get(key);
+
+    if (existing) {
+      continue;
+    }
+
+    let receipt: any;
+
+    try {
+      receipt =
+        await getReceipt(
+          rpcUrl,
+          txHash
+        );
+    } catch {
+      continue;
+    }
+
+    if (!receipt) {
+      continue;
+    }
+
+    if (
+      receipt.status !== "0x1" &&
+      receipt.status !== 1 &&
+      receipt.status !== "1"
+    ) {
+      continue;
+    }
+
+    let code: string;
+
+    try {
+      code =
+        await getCode(
+          rpcUrl,
+          parsed.pair
+        );
+    } catch {
+      continue;
+    }
 
     if (
       !code ||
       code === "0x"
     ) {
-      return null;
+      continue;
     }
 
-    const [
-      symbol0,
-      symbol1,
-      liquidity,
-      holders,
-      block,
-    ] = await Promise.all([
-      getTokenSymbol(
-        provider,
-        event.token0
-      ),
+    const holders =
+      extractInitialHolders(
+        receipt,
+        parsed.token0,
+        parsed.token1,
+        parsed.pair
+      );
 
-      getTokenSymbol(
-        provider,
-        event.token1
-      ),
-
-      getInitialLiquidity(
-        provider,
-        event.pair_address,
-        event.isV3
-      ),
-
-      extractInitialHolders({
-        tx_hash:
-          event.tx_hash,
-
+    try {
+      await storePair(
+        env,
         chain,
+        parsed,
+        txHash,
+        blockNumber,
+        holders
+      );
 
-        pair_address:
-          event.pair_address,
-
-        token0:
-          event.token0,
-
-        token1:
-          event.token1,
-      }),
-
-      provider.getBlock(
-        event.block_number
-      ),
-    ]);
-
-    const createdAt =
-      block
-        ? new Date(
-            Number(
-              block.timestamp
-            ) * 1000
-          ).toISOString()
-        : new Date().toISOString();
-
-    return {
-      pair_address:
-        normalizeAddress(
-          event.pair_address
-        ),
-
-      factory:
-        normalizeAddress(
-          event.factory
-        ),
-
-      tokens: [
-        {
-          address:
-            normalizeAddress(
-              event.token0
-            ),
-
-          symbol:
-            symbol0,
-        },
-
-        {
-          address:
-            normalizeAddress(
-              event.token1
-            ),
-
-          symbol:
-            symbol1,
-        },
-      ],
-
-      init_liquidity:
-        liquidity,
-
-      top_holders:
-        holders,
-
-      created_at:
-        createdAt,
-
-      block_number:
-        event.block_number,
-
-      tx_hash:
-        event.tx_hash,
-    };
-  } catch (error) {
-    console.warn(
-      `Failed to build pair ${event.pair_address}:`,
-      error
-    );
-
-    return null;
+      processed++;
+    } catch {
+      continue;
+    }
   }
-}
 
-export async function handleWebhook(
-  request: Request,
-  kvNamespace: KVNamespaceLike
-): Promise<Response> {
-  try {
-    if (
-      request.method !== "POST"
-    ) {
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      processed,
+      block: blockNumber,
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type":
+          "application/json",
+      },
     }
-
-    const payload =
-      (await request.json()) as
-        AlchemyWebhookPayload;
-
-    const chain =
-      detectChain(
-        payload.blockchain?.network
-      );
-
-    if (!chain) {
-      console.warn(
-        "Unsupported blockchain network"
-      );
-
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const txHash =
-      payload.event
-        ?.transaction?.hash;
-
-    if (!txHash) {
-      console.warn(
-        "Webhook missing transaction hash"
-      );
-
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const rawBlock =
-      payload.event
-        ?.block?.number;
-
-    const blockNumber =
-      typeof rawBlock === "string"
-        ? Number(rawBlock)
-        : typeof rawBlock === "number"
-          ? rawBlock
-          : NaN;
-
-    if (
-      !Number.isSafeInteger(
-        blockNumber
-      ) ||
-      blockNumber < 0
-    ) {
-      console.warn(
-        "Webhook contains invalid block number"
-      );
-
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const logs =
-      payload.event
-        ?.data?.logs ?? [];
-
-    const pairEvents =
-      logs
-        .map((log) =>
-          parsePairEvent(
-            chain,
-            log,
-            txHash,
-            blockNumber
-          )
-        )
-        .filter(
-          (
-            event
-          ): event is PairEvent =>
-            event !== null
-        );
-
-    if (
-      pairEvents.length === 0
-    ) {
-      return new Response(
-        "OK",
-        { status: 200 }
-      );
-    }
-
-    const provider =
-      new ethers.JsonRpcProvider(
-        CHAINS[chain].rpc_url
-      );
-
-    const store =
-      new KVStoreImpl(
-        kvNamespace
-      );
-
-    for (
-      const pairEvent of
-      pairEvents
-    ) {
-      try {
-        const pairAddress =
-          normalizeAddress(
-            pairEvent.pair_address
-          );
-
-        const key =
-          `pair:${chain}:${pairAddress.toLowerCase()}`;
-
-        if (
-          await store.isDuplicate(
-            key
-          )
-        ) {
-          continue;
-        }
-
-        const pair =
-          await buildNewPair(
-            chain,
-            {
-              ...pairEvent,
-
-              pair_address:
-                pairAddress,
-            },
-            provider
-          );
-
-        if (!pair) {
-          continue;
-        }
-
-        await store.write(
-          key,
-          pair
-        );
-      } catch (error) {
-        console.warn(
-          `Failed to process pair ${pairEvent.pair_address}:`,
-          error
-        );
-      }
-    }
-
-    return new Response(
-      "OK",
-      { status: 200 }
-    );
-  } catch (error) {
-    console.warn(
-      "Webhook processing error:",
-      error
-    );
-
-    /*
-     * Return 200 so the webhook provider does not
-     * continuously retry malformed/unsupported
-     * events. Individual processing failures are
-     * isolated above.
-     */
-    return new Response(
-      "OK",
-      { status: 200 }
-    );
-  }
+  );
 }
