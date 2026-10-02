@@ -61,6 +61,30 @@ function getProvider(
   );
 }
 
+/*
+ * Some RPC endpoints reject JSON-RPC hex quantities
+ * when they have an odd number of hexadecimal digits.
+ *
+ * Example:
+ *   0x18e594f  -> rejected by some RPCs
+ *   0x018e594f -> accepted
+ *
+ * We therefore normalize block numbers to even-length
+ * hexadecimal quantities before sending them to eth_getLogs.
+ */
+function toRpcBlockTag(
+  block: number
+): string {
+  const hex =
+    block.toString(16);
+
+  return `0x${
+    hex.length % 2 === 1
+      ? `0${hex}`
+      : hex
+  }`;
+}
+
 function normalizeAddress(
   address: string
 ): string {
@@ -340,7 +364,7 @@ async function processV3Event(
 ): Promise<boolean> {
   try {
     if (
-      log.topics.length < 4
+      log.topics.length < 3
     ) {
       return false;
     }
@@ -362,34 +386,6 @@ async function processV3Event(
         log.topics[2]
       );
 
-    const decoded =
-      ethers.AbiCoder
-        .defaultAbiCoder()
-        .decode(
-          [
-            "int24",
-            "address",
-            "uint256",
-          ],
-          log.data
-        );
-
-    /*
-     * V3 PoolCreated event layout:
-     *
-     * token0
-     * token1
-     * fee
-     * tickSpacing
-     * pool
-     *
-     * The pool address is the final
-     * indexed/non-indexed value depending
-     * on decoded representation.
-     *
-     * If decoding does not expose a valid
-     * pool address, skip safely.
-     */
     let pool: string | null = null;
 
     try {
@@ -581,21 +577,23 @@ async function scanRange(
 ): Promise<number> {
   let processed = 0;
 
-  const v2Logs =
-    await provider.getLogs({
-      address:
-        V2_FACTORIES[chain],
+  const fromBlockTag =
+    toRpcBlockTag(
+      fromBlock
+    );
 
-      topics: [
-        PAIR_CREATED_TOPIC,
-      ],
+  const toBlockTag =
+    toRpcBlockTag(
+      toBlock
+    );
 
-      fromBlock,
-
-      toBlock,
-    });
-
-  for (const log of v2Logs) {
+  /*
+   * Scan each V2 factory separately.
+   * This avoids RPC endpoints that reject an address array.
+   */
+  for (
+    const factory of V2_FACTORIES[chain]
+  ) {
     if (
       processed >=
       MAX_PAIRS_PER_RUN
@@ -603,37 +601,23 @@ async function scanRange(
       break;
     }
 
-    if (
-      await processV2Event(
-        provider,
-        store,
-        chain,
-        log
-      )
-    ) {
-      processed++;
-    }
-  }
-
-  if (
-    processed <
-    MAX_PAIRS_PER_RUN
-  ) {
-    const v3Logs =
+    const v2Logs =
       await provider.getLogs({
         address:
-          V3_FACTORIES[chain],
+          factory,
 
         topics: [
-          V3_POOL_CREATED_TOPIC,
+          PAIR_CREATED_TOPIC,
         ],
 
-        fromBlock,
+        fromBlock:
+          fromBlockTag,
 
-        toBlock,
+        toBlock:
+          toBlockTag,
       });
 
-    for (const log of v3Logs) {
+    for (const log of v2Logs) {
       if (
         processed >=
         MAX_PAIRS_PER_RUN
@@ -642,7 +626,7 @@ async function scanRange(
       }
 
       if (
-        await processV3Event(
+        await processV2Event(
           provider,
           store,
           chain,
@@ -650,6 +634,61 @@ async function scanRange(
         )
       ) {
         processed++;
+      }
+    }
+  }
+
+  /*
+   * Scan each V3 factory separately.
+   */
+  if (
+    processed <
+    MAX_PAIRS_PER_RUN
+  ) {
+    for (
+      const factory of V3_FACTORIES[chain]
+    ) {
+      if (
+        processed >=
+        MAX_PAIRS_PER_RUN
+      ) {
+        break;
+      }
+
+      const v3Logs =
+        await provider.getLogs({
+          address:
+            factory,
+
+          topics: [
+            V3_POOL_CREATED_TOPIC,
+          ],
+
+          fromBlock:
+            fromBlockTag,
+
+          toBlock:
+            toBlockTag,
+        });
+
+      for (const log of v3Logs) {
+        if (
+          processed >=
+          MAX_PAIRS_PER_RUN
+        ) {
+          break;
+        }
+
+        if (
+          await processV3Event(
+            provider,
+            store,
+            chain,
+            log
+          )
+        ) {
+          processed++;
+        }
       }
     }
   }
