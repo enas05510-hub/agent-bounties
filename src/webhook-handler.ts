@@ -8,7 +8,6 @@ import {
 import {
   pairKey,
   KVStoreImpl,
-  KVNamespaceLike,
 } from "./kv";
 
 import {
@@ -18,6 +17,11 @@ import {
 const PAIR_CREATED_TOPIC =
   "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
+/*
+ * IMPORTANT:
+ * All keys are lowercase because lookup uses
+ * factory.toLowerCase().
+ */
 const FACTORIES: Record<
   string,
   ChainName
@@ -71,9 +75,11 @@ type WebhookPayload = {
     };
     block?: WebhookBlock;
   };
+
   data?: {
     block?: WebhookBlock;
   };
+
   block?: WebhookBlock;
 };
 
@@ -106,9 +112,7 @@ function normalizeAddress(
   }
 
   try {
-    return ethers.getAddress(
-      value
-    );
+    return ethers.getAddress(value);
   } catch {
     return null;
   }
@@ -158,9 +162,7 @@ function extractPair(
   const topics =
     log.topics ?? [];
 
-  if (
-    topics.length < 3
-  ) {
+  if (topics.length < 3) {
     return null;
   }
 
@@ -191,25 +193,16 @@ function extractPair(
       );
 
     const token0 =
-      normalizeAddress(
-        token0Raw
-      );
+      normalizeAddress(token0Raw);
 
     const token1 =
-      normalizeAddress(
-        token1Raw
-      );
+      normalizeAddress(token1Raw);
 
-    if (
-      !token0 ||
-      !token1
-    ) {
+    if (!token0 || !token1) {
       return null;
     }
 
-    if (
-      log.data.length < 130
-    ) {
+    if (log.data.length < 130) {
       return null;
     }
 
@@ -221,9 +214,7 @@ function extractPair(
       );
 
     const pair =
-      normalizeAddress(
-        pairRaw
-      );
+      normalizeAddress(pairRaw);
 
     if (!pair) {
       return null;
@@ -254,22 +245,19 @@ async function rpc(
   params: unknown[]
 ): Promise<any> {
   const response =
-    await fetch(
-      rpcUrl,
-      {
-        method: "POST",
-        headers: {
-          "content-type":
-            "application/json",
-        },
-        body: JSON.stringify({
-          jsonrpc: "2.0",
-          id: 1,
-          method,
-          params,
-        }),
-      }
-    );
+    await fetch(rpcUrl, {
+      method: "POST",
+      headers: {
+        "content-type":
+          "application/json",
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        params,
+      }),
+    });
 
   if (!response.ok) {
     throw new Error(
@@ -328,7 +316,10 @@ async function getCode(
   return rpcWithRetry(
     rpcUrl,
     "eth_getCode",
-    [address, "latest"]
+    [
+      address,
+      "latest",
+    ]
   );
 }
 
@@ -338,9 +329,8 @@ async function getTokenSymbol(
 ): Promise<string> {
   try {
     const data =
-      ethers.id(
-        "symbol()"
-      ).slice(0, 10);
+      ethers.id("symbol()")
+        .slice(0, 10);
 
     const result =
       await rpcWithRetry(
@@ -356,15 +346,15 @@ async function getTokenSymbol(
       );
 
     if (
-      typeof result !==
-        "string" ||
+      typeof result !== "string" ||
       result === "0x"
     ) {
       return "UNKNOWN";
     }
 
     try {
-      return ethers.AbiCoder
+      return ethers
+        .AbiCoder
         .defaultAbiCoder()
         .decode(
           ["string"],
@@ -374,7 +364,8 @@ async function getTokenSymbol(
     } catch {
       try {
         const bytes32 =
-          ethers.AbiCoder
+          ethers
+            .AbiCoder
             .defaultAbiCoder()
             .decode(
               ["bytes32"],
@@ -403,9 +394,9 @@ async function getV2Reserves(
 }> {
   try {
     const selector =
-      ethers.id(
-        "getReserves()"
-      ).slice(0, 10);
+      ethers
+        .id("getReserves()")
+        .slice(0, 10);
 
     const result =
       await rpcWithRetry(
@@ -421,8 +412,7 @@ async function getV2Reserves(
       );
 
     if (
-      typeof result !==
-        "string" ||
+      typeof result !== "string" ||
       result === "0x"
     ) {
       return {
@@ -432,7 +422,8 @@ async function getV2Reserves(
     }
 
     const decoded =
-      ethers.AbiCoder
+      ethers
+        .AbiCoder
         .defaultAbiCoder()
         .decode(
           [
@@ -504,11 +495,10 @@ async function verifyAlchemySignature(
           signatureBytes
         )
       )
-        .map(
-          (byte) =>
-            byte
-              .toString(16)
-              .padStart(2, "0")
+        .map((byte) =>
+          byte
+            .toString(16)
+            .padStart(2, "0")
         )
         .join("");
 
@@ -526,17 +516,14 @@ export async function handleWebhook(
   env: WebhookEnv
 ): Promise<Response> {
   const block =
-    getBlockAndLogs(
-      payload
-    );
+    getBlockAndLogs(payload);
 
   if (!block) {
     return jsonResponse(
       {
         ok: true,
         processed: 0,
-        reason:
-          "no_block",
+        reason: "no_block",
       },
       200
     );
@@ -575,9 +562,7 @@ export async function handleWebhook(
       env.PAIRS_KV
     );
 
-  for (
-    const log of logs
-  ) {
+  for (const log of logs) {
     const factory =
       getLogAddress(log);
 
@@ -585,6 +570,11 @@ export async function handleWebhook(
       continue;
     }
 
+    /*
+     * FIX:
+     * factory is normalized through
+     * lowercase before lookup.
+     */
     const chain =
       FACTORIES[
         factory.toLowerCase()
@@ -610,6 +600,7 @@ export async function handleWebhook(
       console.warn(
         "PairCreated candidate has no transaction hash"
       );
+
       continue;
     }
 
@@ -635,6 +626,7 @@ export async function handleWebhook(
         `KV deduplication failed for ${key}:`,
         error
       );
+
       continue;
     }
 
@@ -649,6 +641,7 @@ export async function handleWebhook(
         console.warn(
           `Receipt not found: ${txHash}`
         );
+
         continue;
       }
 
@@ -660,6 +653,7 @@ export async function handleWebhook(
         console.warn(
           `Transaction reverted: ${txHash}`
         );
+
         continue;
       }
 
@@ -672,6 +666,7 @@ export async function handleWebhook(
         console.warn(
           `Receipt hash mismatch: ${txHash}`
         );
+
         continue;
       }
 
@@ -689,6 +684,7 @@ export async function handleWebhook(
         console.warn(
           `Pair has no contract code: ${parsed.pair}`
         );
+
         continue;
       }
 
@@ -702,16 +698,21 @@ export async function handleWebhook(
             rpcUrl,
             parsed.token0
           ),
+
           getTokenSymbol(
             rpcUrl,
             parsed.token1
           ),
+
           getV2Reserves(
             rpcUrl,
             parsed.pair
           ),
         ]);
 
+      /*
+       * Same holder logic used by scanner.
+       */
       const holders =
         extractInitialHoldersFromReceipt(
           receipt,
@@ -730,8 +731,7 @@ export async function handleWebhook(
           )
         );
 
-      const pair:
-        NewPair = {
+      const pair: NewPair = {
         pair_address:
           ethers.getAddress(
             parsed.pair
@@ -748,16 +748,15 @@ export async function handleWebhook(
               ethers.getAddress(
                 parsed.token0
               ),
-            symbol:
-              symbol0,
+            symbol: symbol0,
           },
+
           {
             address:
               ethers.getAddress(
                 parsed.token1
               ),
-            symbol:
-              symbol1,
+            symbol: symbol1,
           },
         ],
 
