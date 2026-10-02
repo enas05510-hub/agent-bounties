@@ -98,9 +98,11 @@ function extractV2Pair(
   token0: string;
   token1: string;
   pair: string;
+  pairIndex: bigint;
 } | null {
   const topics = log.topics ?? [];
 
+  // PairCreated(address,address,address,uint256)
   if (topics.length < 3) {
     return null;
   }
@@ -112,36 +114,55 @@ function extractV2Pair(
     return null;
   }
 
-  const token0 = normalizeAddress(
-    ethers.getAddress(
-      ethers.dataSlice(topics[1], 12)
-    )
-  );
+  try {
+    // Indexed address parameters are stored as 32-byte topics.
+    const token0 = normalizeAddress(
+      ethers.getAddress(
+        ethers.dataSlice(topics[1], 12, 32)
+      )
+    );
 
-  const token1 = normalizeAddress(
-    ethers.getAddress(
-      ethers.dataSlice(topics[2], 12)
-    )
-  );
+    const token1 = normalizeAddress(
+      ethers.getAddress(
+        ethers.dataSlice(topics[2], 12, 32)
+      )
+    );
 
-  if (!token0 || !token1) {
+    if (!token0 || !token1) {
+      return null;
+    }
+
+    if (!log.data || log.data.length < 130) {
+      return null;
+    }
+
+    // Non-indexed address parameter:
+    // address is right-aligned inside a 32-byte ABI word.
+    const pair = normalizeAddress(
+      ethers.getAddress(
+        ethers.dataSlice(log.data, 12, 32)
+      )
+    );
+
+    // Second 32-byte ABI word = pair index.
+    const pairIndex = BigInt(
+      ethers.dataSlice(log.data, 32, 64)
+    );
+
+    if (!pair) {
+      return null;
+    }
+
+    return {
+      token0,
+      token1,
+      pair,
+      pairIndex,
+    };
+  } catch {
     return null;
   }
-
-  let pair: string | null = null;
-
-  if (log.data && log.data.length >= 66) {
-    try {
-      pair = normalizeAddress(
-        ethers.getAddress(
-          ethers.dataSlice(log.data, 0, 32).slice(0, 20)
-        )
-      );
-    } catch {
-      pair = null;
-    }
-  }
-
+}
   if (!pair && topics.length >= 4) {
     try {
       pair = normalizeAddress(
