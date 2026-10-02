@@ -3,14 +3,14 @@ import { ChainConfig, ChainName, FACTORIES } from "./types";
 export const CHAINS: Record<ChainName, ChainConfig> = {
   ethereum: {
     name: "ethereum",
-    rpc_url: "https://eth.llamarpc.com",
+    rpc_url: "https://ethereum-rpc.publicnode.com",
     blocks_per_minute: 5,
     factories: FACTORIES.ethereum,
   },
 
   bsc: {
     name: "bsc",
-    rpc_url: "https://bsc-dataseed.binance.org",
+    rpc_url: "https://bsc-rpc.publicnode.com",
     blocks_per_minute: 20,
     factories: FACTORIES.bsc,
   },
