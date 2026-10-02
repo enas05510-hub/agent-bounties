@@ -47,7 +47,7 @@ type WebhookPayload = {
 
 interface Env {
   PAIRS_KV: KVNamespace;
-  ALCHEMY_SIGNING_KEY: string;
+  ALCHEMY_SIGNING_KEY?: string;
 }
 
 const RPCS: Record<string, string> = {
