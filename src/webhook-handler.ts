@@ -54,10 +54,8 @@ interface Env {
 }
 
 const RPCS: Record<string, string> = {
-  ethereum:
-    "https://eth.llamarpc.com",
-  bsc:
-    "https://bsc-dataseed.binance.org",
+  ethereum: "https://ethereum-rpc.publicnode.com",
+  bsc: "https://bsc-rpc.publicnode.com",
 };
 
 function normalizeAddress(value?: string): string | null {
