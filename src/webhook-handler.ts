@@ -49,6 +49,7 @@ type WebhookPayload = {
     logs?: WebhookLog[];
   };
 };
+
 interface Env {
   PAIRS_KV: KVNamespace;
 }
@@ -132,19 +133,21 @@ function extractV2Pair(
       return null;
     }
 
+    // PairCreated data contains:
+    // 32 bytes: pair address
+    // 32 bytes: pair index
     if (!log.data || log.data.length < 130) {
       return null;
     }
 
-    // Non-indexed address parameter:
-    // address is right-aligned inside a 32-byte ABI word.
+    // Address is right-aligned inside the 32-byte ABI word.
     const pair = normalizeAddress(
       ethers.getAddress(
         ethers.dataSlice(log.data, 12, 32)
       )
     );
 
-    // Second 32-byte ABI word = pair index.
+    // Second 32-byte ABI word.
     const pairIndex = BigInt(
       ethers.dataSlice(log.data, 32, 64)
     );
@@ -162,28 +165,6 @@ function extractV2Pair(
   } catch {
     return null;
   }
-}
-  if (!pair && topics.length >= 4) {
-    try {
-      pair = normalizeAddress(
-        ethers.getAddress(
-          ethers.dataSlice(topics[3], 12)
-        )
-      );
-    } catch {
-      pair = null;
-    }
-  }
-
-  if (!pair) {
-    return null;
-  }
-
-  return {
-    token0,
-    token1,
-    pair,
-  };
 }
 
 async function rpc(
@@ -340,6 +321,7 @@ async function storePair(
     token0: string;
     token1: string;
     pair: string;
+    pairIndex: bigint;
   },
   txHash: string | null,
   blockNumber: number,
@@ -347,19 +329,21 @@ async function storePair(
 ) {
   const key =
     `${chain}:${pair.pair.toLowerCase()}`;
-const value = {
-  chain,
-  pair: pair.pair,
-  token0: pair.token0,
-  token1: pair.token1,
-  token0_raw: pair.token0,
-  token1_raw: pair.token1,
-  pair_index: pair.pairIndex.toString(),
-  tx_hash: txHash,
-  block_number: blockNumber,
-  holders,
-  detected_at: new Date().toISOString(),
-};
+
+  const value = {
+    chain,
+    pair: pair.pair,
+    token0: pair.token0,
+    token1: pair.token1,
+    token0_raw: pair.token0,
+    token1_raw: pair.token1,
+    pair_index: pair.pairIndex.toString(),
+    tx_hash: txHash,
+    block_number: blockNumber,
+    holders,
+    detected_at: new Date().toISOString(),
+  };
+
   await env.PAIRS_KV.put(
     key,
     JSON.stringify(value)
