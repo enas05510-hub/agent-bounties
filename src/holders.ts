@@ -28,8 +28,13 @@ function normalizeAddress(
 function topicToAddress(
   topic: string
 ): string {
-  if (!topic || topic.length < 40) {
-    throw new Error("Invalid indexed address topic");
+  if (
+    !topic ||
+    topic.length < 40
+  ) {
+    throw new Error(
+      "Invalid indexed address topic"
+    );
   }
 
   return normalizeAddress(
@@ -47,7 +52,8 @@ function getProvider(
 
 function addHolder(
   holders: Set<string>,
-  address: string
+  address: string,
+  pairAddress?: string
 ): void {
   const normalized =
     normalizeAddress(address);
@@ -59,7 +65,140 @@ function addHolder(
     return;
   }
 
+  if (
+    pairAddress &&
+    normalized.toLowerCase() ===
+      pairAddress.toLowerCase()
+  ) {
+    return;
+  }
+
   holders.add(normalized);
+}
+
+export function extractInitialHoldersFromReceipt(
+  receipt: any,
+  token0Input: string,
+  token1Input: string,
+  pairAddressInput: string
+): string[] {
+  try {
+    const token0 =
+      normalizeAddress(
+        token0Input
+      );
+
+    const token1 =
+      normalizeAddress(
+        token1Input
+      );
+
+    const pairAddress =
+      normalizeAddress(
+        pairAddressInput
+      );
+
+    const holders =
+      new Set<string>();
+
+    const logs =
+      receipt?.logs ?? [];
+
+    /*
+     * Primary source:
+     * ERC20 Transfer events for the two
+     * newly-created tokens.
+     *
+     * Mint events (from == zero) are preferred.
+     */
+    for (const log of logs) {
+      try {
+        if (
+          !Array.isArray(
+            log.topics
+          ) ||
+          log.topics.length < 3
+        ) {
+          continue;
+        }
+
+        if (
+          log.topics[0]?.toLowerCase() !==
+          TRANSFER_TOPIC.toLowerCase()
+        ) {
+          continue;
+        }
+
+        const tokenAddress =
+          normalizeAddress(
+            log.address
+          );
+
+        if (
+          tokenAddress.toLowerCase() !==
+            token0.toLowerCase() &&
+          tokenAddress.toLowerCase() !==
+            token1.toLowerCase()
+        ) {
+          continue;
+        }
+
+        const from =
+          topicToAddress(
+            log.topics[1]
+          );
+
+        const to =
+          topicToAddress(
+            log.topics[2]
+          );
+
+        if (
+          from.toLowerCase() !==
+          ZERO_ADDRESS.toLowerCase()
+        ) {
+          continue;
+        }
+
+        addHolder(
+          holders,
+          to,
+          pairAddress
+        );
+
+        if (
+          holders.size >=
+          MAX_HOLDERS
+        ) {
+          break;
+        }
+      } catch {
+        // Ignore malformed individual logs.
+      }
+    }
+
+    /*
+     * Fallback:
+     * include transaction sender if fewer
+     * than three candidates were discovered.
+     *
+     * The caller can add this separately when
+     * the transaction object is already available.
+     */
+    return Array.from(
+      holders
+    ).slice(
+      0,
+      MAX_HOLDERS
+    );
+  } catch (error) {
+    console.warn(
+      "Failed to extract holders from receipt:",
+      error
+    );
+
+    return [];
+  }
 }
 
 export async function extractInitialHolders(
@@ -82,106 +221,37 @@ export async function extractInitialHolders(
       return [];
     }
 
-    const token0 =
-      normalizeAddress(input.token0);
-
-    const token1 =
-      normalizeAddress(input.token1);
-
-    const pairAddress =
-      normalizeAddress(input.pair_address);
-
     const holders =
       new Set<string>();
 
-    /*
-     * Primary source:
-     *
-     * ERC20 Transfer events where:
-     *
-     * from == address(0)
-     *
-     * These represent token minting and therefore
-     * provide the strongest signal for initial
-     * token recipients.
-     */
-    for (const log of receipt.logs) {
-      try {
-        if (
-          log.topics[0] !==
-          TRANSFER_TOPIC
-        ) {
-          continue;
-        }
+    const receiptHolders =
+      extractInitialHoldersFromReceipt(
+        receipt,
+        input.token0,
+        input.token1,
+        input.pair_address
+      );
 
-        if (
-          log.topics.length < 3
-        ) {
-          continue;
-        }
+    for (
+      const holder of receiptHolders
+    ) {
+      holders.add(holder);
 
-        const tokenAddress =
-          normalizeAddress(
-            log.address
-          );
-
-        if (
-          tokenAddress !== token0 &&
-          tokenAddress !== token1
-        ) {
-          continue;
-        }
-
-        const from =
-          topicToAddress(
-            log.topics[1]
-          );
-
-        const to =
-          topicToAddress(
-            log.topics[2]
-          );
-
-        if (
-          from.toLowerCase() !==
-          ZERO_ADDRESS.toLowerCase()
-        ) {
-          continue;
-        }
-
-        if (
-          to.toLowerCase() ===
-          ZERO_ADDRESS.toLowerCase()
-        ) {
-          continue;
-        }
-
-        addHolder(
-          holders,
-          to
-        );
-
-        if (
-          holders.size >=
+      if (
+        holders.size >=
+        MAX_HOLDERS
+      ) {
+        return Array.from(
+          holders
+        ).slice(
+          0,
           MAX_HOLDERS
-        ) {
-          break;
-        }
-      } catch {
-        /*
-         * Ignore malformed individual logs while
-         * continuing to process the remaining receipt.
-         */
-        continue;
+        );
       }
     }
 
     /*
-     * If mint events gave us fewer than three
-     * addresses, inspect the transaction sender.
-     *
-     * This is a fallback signal, not a primary
-     * holder classification.
+     * Transaction sender fallback.
      */
     if (
       holders.size < 3
@@ -197,7 +267,8 @@ export async function extractInitialHolders(
         ) {
           addHolder(
             holders,
-            transaction.from
+            transaction.from,
+            input.pair_address
           );
         }
       } catch (error) {
@@ -209,26 +280,10 @@ export async function extractInitialHolders(
     }
 
     /*
-     * V3 pools can create the pool without exposing
-     * V2-style reserves or a simple mint pattern.
-     *
-     * As a final fallback, include the pool address
-     * so downstream consumers still receive a
-     * deterministic address associated with the
-     * newly-created market.
-     *
-     * It is only added when fewer than three genuine
-     * candidate holders were found.
+     * Do not classify the pool contract itself
+     * as a holder. It is an infrastructure address,
+     * not a token holder.
      */
-    if (
-      holders.size < 3
-    ) {
-      addHolder(
-        holders,
-        pairAddress
-      );
-    }
-
     return Array.from(
       holders
     ).slice(
