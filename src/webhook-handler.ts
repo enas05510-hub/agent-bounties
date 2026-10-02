@@ -1,449 +1,671 @@
 import { ethers } from "ethers";
 
 const PAIR_CREATED_TOPIC =
-"0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
+  "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
-const FACTORIES = new Set([
-"0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f",
-"0x1f98431c8ad98523631ae4a59f267346ea31f984",
-"0xca143ce32fe78f1f7019d7d551a6402fc5350c73",
-"0x0fbcf9fa4f9c56b0f40a671ad40e0805a091865",
-]);
+const FACTORIES: Record<string, string> = {
+  "0x5c69bee701ef814a2b6a3edd4b1652cb9cc5aa6f": "ethereum",
+  "0x1f98431c8ad98523631ae4a59f267346ea31f984": "ethereum",
+  "0xca143ce32fe78f1f7019d7d551a6402fc5350c73": "bsc",
+  "0x0fbcf9fa4f9c56b0f40a671ad40e0805a091865": "bsc",
+};
 
 const TRANSFER_TOPIC = ethers.id(
-"Transfer(address,address,uint256)"
+  "Transfer(address,address,uint256)"
 );
 
 type WebhookLog = {
-data?: string;
-topics?: string[];
-account?: {
-address?: string;
-};
-address?: string;
-transaction?: {
-hash?: string;
-};
-transactionHash?: string;
+  data?: string;
+  topics?: string[];
+  account?: {
+    address?: string;
+  };
+  address?: string;
+  transaction?: {
+    hash?: string;
+  };
+  transactionHash?: string;
 };
 
 type WebhookPayload = {
-event?: {
-data?: {
-block?: {
-number?: number | string;
-logs?: WebhookLog[];
-};
-};
-};
-data?: {
-block?: {
-number?: number | string;
-logs?: WebhookLog[];
-};
-};
-block?: {
-number?: number | string;
-logs?: WebhookLog[];
-};
+  event?: {
+    data?: {
+      block?: {
+        number?: number | string;
+        logs?: WebhookLog[];
+      };
+    };
+  };
+  data?: {
+    block?: {
+      number?: number | string;
+      logs?: WebhookLog[];
+    };
+  };
+  block?: {
+    number?: number | string;
+    logs?: WebhookLog[];
+  };
 };
 
 interface Env {
-PAIRS_KV: KVNamespace;
+  PAIRS_KV: KVNamespace;
 }
 
 const RPCS: Record<string, string> = {
-ethereum: "https://ethereum-rpc.publicnode.com",
-bsc: "https://bsc-rpc.publicnode.com",
+  ethereum: "https://ethereum-rpc.publicnode.com",
+  bsc: "https://bsc-rpc.publicnode.com",
 };
 
 function normalizeAddress(value?: string): string | null {
-if (!value) {
-return null;
-}
+  if (!value) {
+    return null;
+  }
 
-try {
-return ethers.getAddress(value);
-} catch {
-return null;
-}
+  try {
+    return ethers.getAddress(value);
+  } catch {
+    return null;
+  }
 }
 
 function getBlockAndLogs(
-payload: WebhookPayload
+  payload: WebhookPayload
 ): {
-number?: number | string;
-logs?: WebhookLog[];
+  number?: number | string;
+  logs?: WebhookLog[];
 } | null {
-return (
-payload.event?.data?.block ??
-payload.data?.block ??
-payload.block ??
-null
-);
+  return (
+    payload.event?.data?.block ??
+    payload.data?.block ??
+    payload.block ??
+    null
+  );
 }
 
-function getLogAddress(
-log: WebhookLog
-): string | null {
-return normalizeAddress(
-log.account?.address ?? log.address
-);
+function getLogAddress(log: WebhookLog): string | null {
+  return normalizeAddress(
+    log.account?.address ?? log.address
+  );
 }
 
 function getTransactionHash(
-log: WebhookLog
+  log: WebhookLog
 ): string | null {
-return (
-log.transaction?.hash ??
-log.transactionHash ??
-null
-);
+  return (
+    log.transaction?.hash ??
+    log.transactionHash ??
+    null
+  );
 }
 
 type ParsedPair = {
-token0: string;
-token1: string;
-pair: string;
-pairIndex: bigint;
+  token0: string;
+  token1: string;
+  pair: string;
+  pairIndex: bigint;
 };
 
 function extractPair(
-log: WebhookLog
+  log: WebhookLog
 ): ParsedPair | null {
-const topics = log.topics ?? [];
+  const topics = log.topics ?? [];
 
-if (topics.length < 3) {
-return null;
-}
+  // PairCreated has:
+  // topic0 = event signature
+  // topic1 = token0
+  // topic2 = token1
+  // data = pair address + pair index
+  if (topics.length < 3) {
+    return null;
+  }
 
-if (
-topics[0]?.toLowerCase() !==
-PAIR_CREATED_TOPIC.toLowerCase()
-) {
-return null;
-}
+  if (
+    topics[0]?.toLowerCase() !==
+    PAIR_CREATED_TOPIC.toLowerCase()
+  ) {
+    return null;
+  }
 
-if (!log.data) {
-return null;
-}
+  if (!log.data) {
+    return null;
+  }
 
-try {
-const token0Raw = ethers.dataSlice(
-topics[1],
-12,
-32
-);
+  try {
+    const token0Raw = ethers.dataSlice(
+      topics[1],
+      12,
+      32
+    );
 
-```
-const token1Raw = ethers.dataSlice(
-  topics[2],
-  12,
-  32
-);
+    const token1Raw = ethers.dataSlice(
+      topics[2],
+      12,
+      32
+    );
 
-const token0 =
-  normalizeAddress(token0Raw);
+    const token0 =
+      normalizeAddress(token0Raw);
 
-const token1 =
-  normalizeAddress(token1Raw);
+    const token1 =
+      normalizeAddress(token1Raw);
 
-if (!token0 || !token1) {
-  return null;
-}
+    if (!token0 || !token1) {
+      return null;
+    }
 
-if (log.data.length < 130) {
-  return null;
-}
+    // PairCreated data contains:
+    // 32 bytes pair address
+    // 32 bytes pair index
+    if (log.data.length < 130) {
+      return null;
+    }
 
-const pairRaw = ethers.dataSlice(
-  log.data,
-  12,
-  32
-);
+    const pairRaw = ethers.dataSlice(
+      log.data,
+      12,
+      32
+    );
 
-const pair =
-  normalizeAddress(pairRaw);
+    const pair =
+      normalizeAddress(pairRaw);
 
-if (!pair) {
-  return null;
-}
+    if (!pair) {
+      return null;
+    }
 
-const pairIndexRaw =
-  ethers.dataSlice(
-    log.data,
-    32,
-    64
-  );
+    const pairIndexRaw =
+      ethers.dataSlice(
+        log.data,
+        32,
+        64
+      );
 
-const pairIndex =
-  BigInt(pairIndexRaw);
+    const pairIndex =
+      BigInt(pairIndexRaw);
 
-return {
-  token0,
-  token1,
-  pair,
-  pairIndex,
-};
-
-
-} catch {
-return null;
-}
+    return {
+      token0,
+      token1,
+      pair,
+      pairIndex,
+    };
+  } catch {
+    return null;
+  }
 }
 
 async function rpc(
-rpcUrl: string,
-method: string,
-params: unknown[]
+  rpcUrl: string,
+  method: string,
+  params: unknown[]
 ): Promise<any> {
-const response = await fetch(rpcUrl, {
-method: "POST",
-headers: {
-"content-type": "application/json",
-},
-body: JSON.stringify({
-jsonrpc: "2.0",
-id: 1,
-method,
-params,
-}),
-});
+  const response = await fetch(rpcUrl, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method,
+      params,
+    }),
+  });
 
-if (!response.ok) {
-throw new Error(
-`RPC HTTP ${response.status}`
-);
-}
+  if (!response.ok) {
+    throw new Error(
+      `RPC HTTP ${response.status}`
+    );
+  }
 
-const json =
-await response.json<any>();
+  const json =
+    await response.json<any>();
 
-if (json.error) {
-throw new Error(
-json.error.message ??
-"RPC request failed"
-);
-}
+  if (json.error) {
+    throw new Error(
+      json.error.message ??
+      "RPC request failed"
+    );
+  }
 
-return json.result;
+  return json.result;
 }
 
 async function rpcWithRetry(
-rpcUrl: string,
-method: string,
-params: unknown[]
+  rpcUrl: string,
+  method: string,
+  params: unknown[]
 ): Promise<any> {
-try {
-return await rpc(
-rpcUrl,
-method,
-params
-);
-} catch {
-return await rpc(
-rpcUrl,
-method,
-params
-);
-}
+  try {
+    return await rpc(
+      rpcUrl,
+      method,
+      params
+    );
+  } catch {
+    return await rpc(
+      rpcUrl,
+      method,
+      params
+    );
+  }
 }
 
 async function getReceipt(
-rpcUrl: string,
-txHash: string
+  rpcUrl: string,
+  txHash: string
 ): Promise<any> {
-return rpcWithRetry(
-rpcUrl,
-"eth_getTransactionReceipt",
-[txHash]
-);
+  return rpcWithRetry(
+    rpcUrl,
+    "eth_getTransactionReceipt",
+    [txHash]
+  );
 }
 
 async function getCode(
-rpcUrl: string,
-address: string
+  rpcUrl: string,
+  address: string
 ): Promise<string> {
-return rpcWithRetry(
-rpcUrl,
-"eth_getCode",
-[address, "latest"]
-);
+  return rpcWithRetry(
+    rpcUrl,
+    "eth_getCode",
+    [address, "latest"]
+  );
 }
 
 function extractInitialHolders(
-receipt: any,
-token0: string,
-token1: string,
-pair: string
+  receipt: any,
+  token0: string,
+  token1: string,
+  pair: string
 ): string[] {
-const holders = new Set<string>();
-const logs = receipt?.logs ?? [];
+  const holders =
+    new Set<string>();
 
-for (const log of logs) {
-if (
-!Array.isArray(log.topics) ||
-log.topics.length < 3
-) {
-continue;
-}
+  const logs =
+    receipt?.logs ?? [];
 
+  for (const log of logs) {
+    if (
+      !Array.isArray(log.topics) ||
+      log.topics.length < 3
+    ) {
+      continue;
+    }
 
-if (
-  log.topics[0]?.toLowerCase() !==
-  TRANSFER_TOPIC.toLowerCase()
-) {
-  continue;
-}
+    if (
+      log.topics[0]?.toLowerCase() !==
+      TRANSFER_TOPIC.toLowerCase()
+    ) {
+      continue;
+    }
 
-const tokenAddress =
-  normalizeAddress(log.address);
+    const tokenAddress =
+      normalizeAddress(log.address);
 
-if (!tokenAddress) {
-  continue;
-}
+    if (!tokenAddress) {
+      continue;
+    }
 
-const isToken =
-  tokenAddress.toLowerCase() ===
-    token0.toLowerCase() ||
-  tokenAddress.toLowerCase() ===
-    token1.toLowerCase();
+    const isToken =
+      tokenAddress.toLowerCase() ===
+        token0.toLowerCase() ||
+      tokenAddress.toLowerCase() ===
+        token1.toLowerCase();
 
-if (!isToken) {
-  continue;
-}
+    if (!isToken) {
+      continue;
+    }
 
-let from: string | null = null;
-let to: string | null = null;
+    let from: string | null = null;
+    let to: string | null = null;
 
-try {
-  from = normalizeAddress(
-    ethers.dataSlice(
-      log.topics[1],
-      12,
-      32
-    )
-  );
+    try {
+      from = normalizeAddress(
+        ethers.dataSlice(
+          log.topics[1],
+          12,
+          32
+        )
+      );
 
-  to = normalizeAddress(
-    ethers.dataSlice(
-      log.topics[2],
-      12,
-      32
-    )
-  );
-} catch {
-  continue;
-}
+      to = normalizeAddress(
+        ethers.dataSlice(
+          log.topics[2],
+          12,
+          32
+        )
+      );
+    } catch {
+      continue;
+    }
 
-if (
-  from &&
-  from !== ethers.ZeroAddress &&
-  from.toLowerCase() !==
-    pair.toLowerCase()
-) {
-  holders.add(from);
-}
+    if (
+      from &&
+      from !== ethers.ZeroAddress &&
+      from.toLowerCase() !==
+        pair.toLowerCase()
+    ) {
+      holders.add(from);
+    }
 
-if (
-  to &&
-  to !== ethers.ZeroAddress &&
-  to.toLowerCase() !==
-    pair.toLowerCase()
-) {
-  holders.add(to);
-}
+    if (
+      to &&
+      to !== ethers.ZeroAddress &&
+      to.toLowerCase() !==
+        pair.toLowerCase()
+    ) {
+      holders.add(to);
+    }
+  }
 
-
-}
-
-return Array.from(holders);
+  return Array.from(holders);
 }
 
 async function storePair(
-env: Env,
-chain: string,
-pair: ParsedPair,
-txHash: string | null,
-blockNumber: number,
-holders: string[]
+  env: Env,
+  chain: string,
+  pair: ParsedPair,
+  txHash: string | null,
+  blockNumber: number,
+  holders: string[]
 ): Promise<void> {
-const key =
-`${chain}:${pair.pair.toLowerCase()}`;
+  const key =
+    `${chain}:${pair.pair.toLowerCase()}`;
 
-const value = {
-chain,
-pair: pair.pair,
-token0: pair.token0,
-token1: pair.token1,
-token0_raw: pair.token0,
-token1_raw: pair.token1,
-pair_index:
-pair.pairIndex.toString(),
-tx_hash: txHash,
-block_number: blockNumber,
-holders,
-detected_at:
-new Date().toISOString(),
-};
+  const value = {
+    chain,
+    pair: pair.pair,
+    token0: pair.token0,
+    token1: pair.token1,
+    token0_raw: pair.token0,
+    token1_raw: pair.token1,
+    pair_index:
+      pair.pairIndex.toString(),
+    tx_hash: txHash,
+    block_number: blockNumber,
+    holders,
+    detected_at:
+      new Date().toISOString(),
+  };
 
-await env.PAIRS_KV.put(
-key,
-JSON.stringify(value)
-);
+  await env.PAIRS_KV.put(
+    key,
+    JSON.stringify(value)
+  );
 }
 
 export async function handleWebhook(
-payload: WebhookPayload,
-env: Env
+  payload: WebhookPayload,
+  env: Env
 ): Promise<Response> {
-const block =
-getBlockAndLogs(payload);
+  const block =
+    getBlockAndLogs(payload);
 
-if (!block) {
-return new Response(
-JSON.stringify({
-ok: true,
-processed: 0,
-reason: "no_block",
-}),
-{
-status: 200,
-headers: {
-"content-type":
-"application/json",
-},
+  if (!block) {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        processed: 0,
+        reason: "no_block",
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type":
+            "application/json",
+        },
+      }
+    );
+  }
+
+  const blockNumber =
+    Number(block.number ?? 0);
+
+  if (
+    !Number.isFinite(blockNumber) ||
+    blockNumber <= 0
+  ) {
+    return new Response(
+      JSON.stringify({
+        ok: true,
+        processed: 0,
+        reason: "invalid_block_number",
+      }),
+      {
+        status: 200,
+        headers: {
+          "content-type":
+            "application/json",
+        },
+      }
+    );
+  }
+
+  const logs =
+    block.logs ?? [];
+
+  let processed = 0;
+
+  for (const log of logs) {
+    // ==========================================
+    // STEP 7
+    // Verify factory + PairCreated + pair data
+    // ==========================================
+
+    const factory =
+      getLogAddress(log);
+
+    if (!factory) {
+      continue;
+    }
+
+    const chain =
+      FACTORIES[
+        factory.toLowerCase()
+      ];
+
+    if (!chain) {
+      continue;
+    }
+
+    const parsed =
+      extractPair(log);
+
+    if (!parsed) {
+      continue;
+    }
+
+    const txHash =
+      getTransactionHash(log);
+
+    if (!txHash) {
+      continue;
+    }
+
+    const rpcUrl =
+      RPCS[chain];
+
+    if (!rpcUrl) {
+      continue;
+    }
+
+    // ==========================================
+    // STEP 8
+    // Verify transaction receipt + success
+    // ==========================================
+
+    let receipt: any;
+
+    try {
+      receipt =
+        await getReceipt(
+          rpcUrl,
+          txHash
+        );
+    } catch {
+      continue;
+    }
+
+    // Receipt may not exist yet.
+    if (!receipt) {
+      continue;
+    }
+
+    // Ethereum JSON-RPC receipt status:
+    // 0x1 = success
+    // 0x0 = reverted
+    if (
+      receipt.status !== "0x1" &&
+      receipt.status !== 1
+    ) {
+      continue;
+    }
+
+    // Make sure the receipt belongs
+    // to the transaction we processed.
+    if (
+      receipt.transactionHash &&
+      receipt.transactionHash.toLowerCase() !==
+        txHash.toLowerCase()
+    ) {
+      continue;
+    }
+
+    // ==========================================
+    // STEP 9
+    // Verify pair address contains contract code
+    // ==========================================
+
+    let code: string;
+
+    try {
+      code =
+        await getCode(
+          rpcUrl,
+          parsed.pair
+        );
+    } catch {
+      continue;
+    }
+
+    // eth_getCode returns "0x" for an EOA
+    // and bytecode for a deployed contract.
+    if (
+      !code ||
+      code === "0x" ||
+      code.length <= 2
+    ) {
+      continue;
+    }
+
+    // ==========================================
+    // Existing holder extraction
+    // ==========================================
+
+    const holders =
+      extractInitialHolders(
+        receipt,
+        parsed.token0,
+        parsed.token1,
+        parsed.pair
+      );
+
+    // ==========================================
+    // Store verified pair
+    // ==========================================
+
+    try {
+      await storePair(
+        env,
+        chain,
+        parsed,
+        txHash,
+        blockNumber,
+        holders
+      );
+
+      processed++;
+    } catch {
+      continue;
+    }
+  }
+
+  return new Response(
+    JSON.stringify({
+      ok: true,
+      processed,
+      block_number: blockNumber,
+    }),
+    {
+      status: 200,
+      headers: {
+        "content-type":
+          "application/json",
+      },
+    }
+  );
 }
-);
-}
 
-const blockNumber = Number(
-block.number ?? 0
-);
+export default {
+  async fetch(
+    request: Request,
+    env: Env
+  ): Promise<Response> {
+    if (
+      request.method !== "POST"
+    ) {
+      return new Response(
+        JSON.stringify({
+          ok: true,
+          service:
+            "agent-bounties",
+        }),
+        {
+          status: 200,
+          headers: {
+            "content-type":
+              "application/json",
+          },
+        }
+      );
+    }
 
-const logs = block.logs ?? [];
+    try {
+      const payload =
+        await request.json<WebhookPayload>();
 
-let processed = 0;
+      return handleWebhook(
+        payload,
+        env
+      );
+    } catch {
+      return new Response(
+        JSON.stringify({
+          ok: false,
+          error:
+            "invalid_json",
+        }),
+        {
+          status: 400,
+          headers: {
+            "content-type":
+              "application/json",
+          },
+        }
+      );
+    }
+  },
 
-for (const log of logs) {
-const factory =
-getLogAddress(log);
-
-```
-if (!factory) {
-  continue;
-}
-
-if (
-  !FACTORIES.has(
-    factory.toLowerCase()
-  )
-) {
-  continue;
-}
-
-const parsed =
-  extractPair(log);
-
-if (!par
-
+  async scheduled(
+    _event: ScheduledEvent,
+    _env: Env,
+    _ctx: ExecutionContext
+  ): Promise<void> {
+    // Cron remains intentionally unchanged
+    // for now. We are focusing on webhook
+    // processing steps 7, 8 and 9.
+    return;
+  },
+};
