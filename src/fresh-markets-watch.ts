@@ -324,20 +324,19 @@ app.post(
     try {
       const payload =
         await c.req.json();
-
       const response =
-        await handleWebhook(
-          payload,
-          {
-            PAIRS_KV:
-              c.env.PAIRS_KV,
-          }
-        );
+  await handleWebhook(
+    payload,
+    {
+      PAIRS_KV:
+        c.env.PAIRS_KV as unknown as KVNamespace,
+    }
+  );
 
-      await updateHealth(
-        c.env.PAIRS_KV,
-        "last_webhook"
-      );
+await updateHealth(
+  c.env.PAIRS_KV as unknown as KVNamespace,
+  "last_webhook"
+);
 
       return response;
     } catch (error) {
