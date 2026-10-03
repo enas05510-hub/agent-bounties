@@ -29,17 +29,17 @@ const PAIR_CREATED_TOPIC = ethers.id(
  * All keys are lowercase because lookup uses
  * factory.toLowerCase().
  */
-const FACTORIES: Record<string, ChainName> = {
-  "0x5c69bEe701ef814a2b6a3edd4b1652cb9cc5aa6f".toLowerCase():
+const FACTORY_CHAINS: Record<string, string> = {
+  ["0x5c69bEe701ef814a2b6a3edd4b1652cb9cc5aa6f".toLowerCase()]:
     "ethereum",
 
-  "0x1f98431c8ad98523631ae4a59f267346ea31f984".toLowerCase():
+  ["0x1f98431c8ad98523631ae4a59f267346ea31f984".toLowerCase()]:
     "ethereum",
 
-  "0xca143ce32fe78f1f7019d7d551a6402fc5350c73".toLowerCase():
+  ["0xca143ce32fe78f1f7019d7d551a6402fc5350c73".toLowerCase()]:
     "bsc",
 
-  "0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865".toLowerCase():
+  ["0x0bfbcf9fa4f9c56b0f40a671ad40e0805a091865".toLowerCase()]:
     "bsc",
 };
 
