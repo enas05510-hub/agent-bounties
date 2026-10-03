@@ -15,4 +15,4 @@ X402_FACILITATOR_URL = "https://facilitator.daydreams.systems"
 binding = "PAIRS_KV"
 
 [triggers]
-crons = ["*/10 * * * *"]
+crons = ["* * * * *"]
