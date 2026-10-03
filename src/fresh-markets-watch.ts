@@ -229,7 +229,12 @@ async function updateHealth(
   kv: KVNamespace,
   field:
     | "last_webhook"
-    | "last_cron"
+    | "last_cron",
+  telemetry?: {
+    detection_latency_ms?: number | null;
+    event_timestamp?: number | null;
+    stored_at?: string | null;
+  }
 ): Promise<void> {
   const current =
     (await kv.get<{
@@ -237,6 +242,15 @@ async function updateHealth(
         | string
         | null;
       last_cron:
+        | string
+        | null;
+      last_detection_latency_ms?:
+        | number
+        | null;
+      last_event_timestamp?:
+        | number
+        | null;
+      last_stored_at?:
         | string
         | null;
     }>(
@@ -249,6 +263,15 @@ async function updateHealth(
 
   current[field] =
     new Date().toISOString();
+
+  if (telemetry) {
+    current.last_detection_latency_ms =
+      telemetry.detection_latency_ms ?? null;
+    current.last_event_timestamp =
+      telemetry.event_timestamp ?? null;
+    current.last_stored_at =
+      telemetry.stored_at ?? null;
+  }
 
   await kv.put(
     HEALTH_KEY,
@@ -268,6 +291,18 @@ async function getHealth(
     | null;
 
   last_cron:
+    | string
+    | null;
+
+  last_detection_latency_ms?:
+    | number
+    | null;
+
+  last_event_timestamp?:
+    | number
+    | null;
+
+  last_stored_at?:
     | string
     | null;
 
@@ -312,6 +347,15 @@ async function getHealth(
 
     last_cron:
       status.last_cron,
+
+    last_detection_latency_ms:
+      status.last_detection_latency_ms ?? null,
+
+    last_event_timestamp:
+      status.last_event_timestamp ?? null,
+
+    last_stored_at:
+      status.last_stored_at ?? null,
 
     pairs_cached:
       ethereumPairs.length +
@@ -467,9 +511,24 @@ app.post(
         response.status < 300
       ) {
         try {
+          let telemetry:
+            | {
+                detection_latency_ms?: number | null;
+                event_timestamp?: number | null;
+                stored_at?: string | null;
+              }
+            | undefined;
+
+          try {
+            telemetry = await response
+              .clone()
+              .json();
+          } catch {}
+
           await updateHealth(
             c.env.PAIRS_KV,
-            "last_webhook"
+            "last_webhook",
+            telemetry
           );
         } catch (healthError) {
           console.warn(
