@@ -55,8 +55,8 @@ Observed deployment checks:
 - [x] Cron fallback implemented.
 - [x] x402 `POST /scan` endpoint deployed.
 - [x] `GET /health` endpoint deployed.
-- [ ] Final live 60-second latency measurement to be demonstrated by the reviewer.
-- [ ] Final false-positive measurement to be demonstrated from live traffic.
+- [ ] Final live 60-second latency measurement — reviewer-verifiable from live production traffic.
+- [ ] Final false-positive measurement — reviewer-verifiable from live production traffic.
 
 ## Notes
 
@@ -64,4 +64,4 @@ The service is deployed and reachable for reviewer verification. The two accepta
 
 ## Payout
 
-Solana payout address: **TO BE PROVIDED BY SUBMITTER**
+Solana payout address: **Bq41rdoFXeDAv6yJh1Zd9kucdxQHXkT2ebffr9Sz3DyY**
