@@ -17,6 +17,10 @@ import {
 const PAIR_CREATED_TOPIC =
   "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
+const V3_POOL_CREATED_TOPIC = ethers.id(
+  "PoolCreated(address,address,uint24,int24,address)"
+);
+
 /*
  * IMPORTANT:
  * All keys are lowercase because lookup uses
@@ -153,87 +157,68 @@ type ParsedPair = {
   token0: string;
   token1: string;
   pair: string;
-  pairIndex: bigint;
+  pairIndex?: bigint;
+  isV3: boolean;
 };
 
 function extractPair(
   log: WebhookLog
 ): ParsedPair | null {
-  const topics =
-    log.topics ?? [];
+  const topics = log.topics ?? [];
 
-  if (topics.length < 3) {
+  if (topics.length < 3 || !log.data) {
     return null;
   }
 
-  if (
-    topics[0]?.toLowerCase() !==
-    PAIR_CREATED_TOPIC.toLowerCase()
-  ) {
-    return null;
-  }
-
-  if (!log.data) {
-    return null;
-  }
+  const topic0 = topics[0]?.toLowerCase();
 
   try {
-    const token0Raw =
-      ethers.dataSlice(
-        topics[1],
-        12,
-        32
+    const token0 = normalizeAddress(
+      ethers.dataSlice(topics[1], 12, 32)
+    );
+    const token1 = normalizeAddress(
+      ethers.dataSlice(topics[2], 12, 32)
+    );
+
+    if (!token0 || !token1) return null;
+
+    if (topic0 === PAIR_CREATED_TOPIC.toLowerCase()) {
+      if (log.data.length < 130) return null;
+
+      const pair = normalizeAddress(
+        ethers.dataSlice(log.data, 12, 32)
       );
+      const pairIndexRaw = ethers.dataSlice(log.data, 32, 64);
 
-    const token1Raw =
-      ethers.dataSlice(
-        topics[2],
-        12,
-        32
-      );
+      if (!pair) return null;
 
-    const token0 =
-      normalizeAddress(token0Raw);
-
-    const token1 =
-      normalizeAddress(token1Raw);
-
-    if (!token0 || !token1) {
-      return null;
+      return {
+        token0,
+        token1,
+        pair,
+        pairIndex: BigInt(pairIndexRaw),
+        isV3: false,
+      };
     }
 
-    if (log.data.length < 130) {
-      return null;
+    if (topic0 === V3_POOL_CREATED_TOPIC.toLowerCase()) {
+      const decoded = ethers.AbiCoder.defaultAbiCoder().decode(
+        ["uint24", "int24", "address"],
+        log.data
+      );
+      const pair = normalizeAddress(decoded[2]);
+
+      if (!pair) return null;
+
+      return {
+        token0,
+        token1,
+        pair,
+        isV3: true,
+      };
     }
 
-    const pairRaw =
-      ethers.dataSlice(
-        log.data,
-        12,
-        32
-      );
-
-    const pair =
-      normalizeAddress(pairRaw);
-
-    if (!pair) {
-      return null;
-    }
-
-    const pairIndexRaw =
-      ethers.dataSlice(
-        log.data,
-        32,
-        64
-      );
-
-    return {
-      token0,
-      token1,
-      pair,
-      pairIndex:
-        BigInt(pairIndexRaw),
-    };
+    return null;
   } catch {
     return null;
   }
@@ -387,11 +372,18 @@ async function getTokenSymbol(
 
 async function getV2Reserves(
   rpcUrl: string,
-  pair: string
+  pair: string,
+  isV3 = false
 ): Promise<{
   token0_raw: string;
   token1_raw: string;
 }> {
+  if (isV3) {
+    return {
+      token0_raw: "0",
+      token1_raw: "0",
+    };
+  }
   try {
     const selector =
       ethers
@@ -706,7 +698,8 @@ export async function handleWebhook(
 
           getV2Reserves(
             rpcUrl,
-            parsed.pair
+            parsed.pair,
+            parsed.isV3
           ),
         ]);
 
@@ -721,13 +714,31 @@ export async function handleWebhook(
           parsed.pair
         );
 
+      if (holders.length < 3) {
+        try {
+          const transaction = await rpcWithRetry(
+            rpcUrl,
+            "eth_getTransactionByHash",
+            [txHash]
+          );
+
+          if (transaction?.from) {
+            holders.push(transaction.from);
+          }
+
+          if (parsed.isV3) {
+            holders.push(parsed.pair);
+          }
+        } catch {}
+      }
+
       const uniqueHolders =
         Array.from(
           new Set(
-            holders.map(
-              (address) =>
-                address.toLowerCase()
-            )
+            holders
+              .map((address) => normalizeAddress(address))
+              .filter(Boolean)
+              .map((address) => address.toLowerCase())
           )
         );
 
