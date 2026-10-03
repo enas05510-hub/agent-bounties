@@ -21,9 +21,10 @@ import {
 const PAIR_CREATED_TOPIC =
   "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
-const V3_POOL_CREATED_TOPIC = ethers.id(
-  "PoolCreated(address,address,uint24,int24,address)"
-);
+const V3_POOL_CREATED_TOPIC =
+  ethers.id(
+    "PoolCreated(address,address,uint24,int24,address)"
+  );
 
 const MAX_BLOCK_RANGE = 2000;
 const MAX_PAIRS_PER_RUN = 20;
@@ -55,6 +56,49 @@ const V3_FACTORIES: Record<
   ],
 };
 
+/*
+ * Only the fields actually used by the scanner are represented here.
+ *
+ * eth_getLogs returns numeric JSON-RPC quantities as hexadecimal strings.
+ * We convert those quantities to numbers before the log reaches the
+ * processing functions.
+ */
+interface RawRpcLog {
+  address: string;
+
+  topics: string[];
+
+  data: string;
+
+  blockNumber: string;
+
+  transactionHash: string;
+
+  transactionIndex: string;
+
+  logIndex: string;
+
+  removed?: boolean;
+}
+
+interface ScanLog {
+  address: string;
+
+  topics: string[];
+
+  data: string;
+
+  blockNumber: number;
+
+  transactionHash: string;
+
+  transactionIndex: number;
+
+  index: number;
+
+  removed: boolean;
+}
+
 function getProvider(
   chain: ChainName
 ): ethers.JsonRpcProvider {
@@ -64,15 +108,15 @@ function getProvider(
 }
 
 /*
- * Some RPC endpoints reject JSON-RPC hex quantities
- * when they have an odd number of hexadecimal digits.
+ * Some RPC endpoints reject JSON-RPC hex quantities when they have
+ * an odd number of hexadecimal digits.
  *
  * Example:
+ *
  *   0x18e594f  -> rejected by some RPCs
  *   0x018e594f -> accepted
  *
- * We therefore normalize block numbers to even-length
- * hexadecimal quantities before sending them to eth_getLogs.
+ * Always send an even-length hexadecimal quantity.
  */
 function toRpcBlockTag(
   block: number
@@ -87,50 +131,141 @@ function toRpcBlockTag(
   }`;
 }
 
+/*
+ * Direct JSON-RPC eth_getLogs implementation.
+ *
+ * This intentionally does NOT use ethers provider.getLogs().
+ * Some PublicNode endpoints reject the normalized values produced
+ * by ethers for eth_getLogs.
+ */
 async function getLogsCompat(
-  provider: ethers.JsonRpcProvider,
   chain: ChainName,
   address: string,
   topic: string,
   fromBlock: string,
   toBlock: string
-): Promise<ethers.Log[]> {
-  const filter = {
-    address,
-    topics: [topic],
-    fromBlock,
-    toBlock,
-  };
+): Promise<ScanLog[]> {
+  const rpcUrl =
+    CHAINS[chain].rpc_url;
 
-  try {
-    return await provider.getLogs(filter);
-  } catch (error) {
-    if (chain !== "bsc") {
-      throw error;
-    }
+  const response =
+    await fetch(
+      rpcUrl,
+      {
+        method: "POST",
 
-    /*
-     * Some BSC RPC implementations reject a single topic value
-     * in this position while accepting the equivalent one-item
-     * OR-list form. The two filters have identical semantics.
-     */
-    console.warn(
-      `Retrying BSC eth_getLogs with nested topic filter for ${address}`
+        headers: {
+          "content-type":
+            "application/json",
+        },
+
+        body: JSON.stringify({
+          jsonrpc: "2.0",
+
+          id: 1,
+
+          method:
+            "eth_getLogs",
+
+          params: [
+            {
+              address,
+
+              topics: [
+                topic,
+              ],
+
+              fromBlock,
+
+              toBlock,
+            },
+          ],
+        }),
+      }
     );
 
-    return await provider.getLogs({
-      address,
-      topics: [[topic]],
-      fromBlock,
-      toBlock,
-    });
+  if (!response.ok) {
+    throw new Error(
+      `RPC HTTP ${response.status}`
+    );
   }
+
+  const payload =
+    (await response.json()) as {
+      result?: RawRpcLog[];
+
+      error?: {
+        code?: number;
+        message?: string;
+        data?: unknown;
+      };
+    };
+
+  if (payload.error) {
+    throw new Error(
+      `eth_getLogs RPC error ${
+        payload.error.code ?? "unknown"
+      }: ${
+        payload.error.message ??
+        "unknown error"
+      }`
+    );
+  }
+
+  if (
+    !Array.isArray(
+      payload.result
+    )
+  ) {
+    return [];
+  }
+
+  return payload.result.map(
+    (log) => ({
+      address:
+        log.address,
+
+      topics:
+        log.topics,
+
+      data:
+        log.data,
+
+      blockNumber:
+        Number.parseInt(
+          log.blockNumber,
+          16
+        ),
+
+      transactionHash:
+        log.transactionHash,
+
+      transactionIndex:
+        Number.parseInt(
+          log.transactionIndex,
+          16
+        ),
+
+      index:
+        Number.parseInt(
+          log.logIndex,
+          16
+        ),
+
+      removed:
+        Boolean(
+          log.removed
+        ),
+    })
+  );
 }
 
 function normalizeAddress(
   address: string
 ): string {
-  return ethers.getAddress(address);
+  return ethers.getAddress(
+    address
+  );
 }
 
 function topicToAddress(
@@ -183,7 +318,9 @@ async function getV2Liquidity(
       await contract.getReserves(
         blockTag === undefined
           ? undefined
-          : { blockTag }
+          : {
+              blockTag,
+            }
       );
 
     return {
@@ -196,6 +333,7 @@ async function getV2Liquidity(
   } catch {
     return {
       token0_raw: "0",
+
       token1_raw: "0",
     };
   }
@@ -205,7 +343,7 @@ async function processV2Event(
   provider: ethers.JsonRpcProvider,
   store: KVStoreImpl,
   chain: ChainName,
-  log: ethers.Log
+  log: ScanLog
 ): Promise<boolean> {
   try {
     if (
@@ -334,7 +472,8 @@ async function processV2Event(
         ),
       ]);
 
-    const newPair: NewPair = {
+    const newPair:
+      NewPair = {
       pair_address:
         pair,
 
@@ -408,7 +547,7 @@ async function processV3Event(
   provider: ethers.JsonRpcProvider,
   store: KVStoreImpl,
   chain: ChainName,
-  log: ethers.Log
+  log: ScanLog
 ): Promise<boolean> {
   try {
     if (
@@ -434,7 +573,8 @@ async function processV3Event(
         log.topics[2]
       );
 
-    let pool: string | null = null;
+    let pool:
+      string | null = null;
 
     try {
       const parsed =
@@ -540,11 +680,16 @@ async function processV3Event(
         ),
       ]);
 
-    if (holders.length < 3) {
-      holders.push(pool);
+    if (
+      holders.length < 3
+    ) {
+      holders.push(
+        pool
+      );
     }
 
-    const newPair: NewPair = {
+    const newPair:
+      NewPair = {
       pair_address:
         pool,
 
@@ -626,14 +771,27 @@ async function scanRange(
   fromBlock: number,
   toBlock: number,
   startedAt: number
-): Promise<{ processed: number; timedOut: boolean }> {
+): Promise<{
+  processed: number;
+  timedOut: boolean;
+}> {
   let processed = 0;
 
-  const hasTimedOut = () =>
-    Date.now() - startedAt >= MAX_RUNTIME_MS;
+  const hasTimedOut =
+    () =>
+      Date.now() -
+        startedAt >=
+      MAX_RUNTIME_MS;
 
-  if (hasTimedOut()) {
-    return { processed, timedOut: true };
+  if (
+    hasTimedOut()
+  ) {
+    return {
+      processed,
+
+      timedOut:
+        true,
+    };
   }
 
   const fromBlockTag =
@@ -648,34 +806,39 @@ async function scanRange(
 
   /*
    * Scan each V2 factory separately.
-   * This avoids RPC endpoints that reject an address array.
    */
   for (
-    const factory of V2_FACTORIES[chain]
+    const factory of
+      V2_FACTORIES[chain]
   ) {
     if (
       hasTimedOut() ||
       processed >=
-      MAX_PAIRS_PER_RUN
+        MAX_PAIRS_PER_RUN
     ) {
       break;
     }
 
     const v2Logs =
       await getLogsCompat(
-        provider,
         chain,
+
         factory,
+
         PAIR_CREATED_TOPIC,
+
         fromBlockTag,
+
         toBlockTag
       );
 
-    for (const log of v2Logs) {
+    for (
+      const log of v2Logs
+    ) {
       if (
         hasTimedOut() ||
         processed >=
-        MAX_PAIRS_PER_RUN
+          MAX_PAIRS_PER_RUN
       ) {
         break;
       }
@@ -683,8 +846,11 @@ async function scanRange(
       if (
         await processV2Event(
           provider,
+
           store,
+
           chain,
+
           log
         )
       ) {
@@ -699,34 +865,40 @@ async function scanRange(
   if (
     !hasTimedOut() &&
     processed <
-    MAX_PAIRS_PER_RUN
+      MAX_PAIRS_PER_RUN
   ) {
     for (
-      const factory of V3_FACTORIES[chain]
+      const factory of
+        V3_FACTORIES[chain]
     ) {
       if (
         hasTimedOut() ||
         processed >=
-        MAX_PAIRS_PER_RUN
+          MAX_PAIRS_PER_RUN
       ) {
         break;
       }
 
       const v3Logs =
         await getLogsCompat(
-          provider,
           chain,
+
           factory,
+
           V3_POOL_CREATED_TOPIC,
+
           fromBlockTag,
+
           toBlockTag
         );
 
-      for (const log of v3Logs) {
+      for (
+        const log of v3Logs
+      ) {
         if (
           hasTimedOut() ||
           processed >=
-          MAX_PAIRS_PER_RUN
+            MAX_PAIRS_PER_RUN
         ) {
           break;
         }
@@ -734,8 +906,11 @@ async function scanRange(
         if (
           await processV3Event(
             provider,
+
             store,
+
             chain,
+
             log
           )
         ) {
@@ -747,7 +922,9 @@ async function scanRange(
 
   return {
     processed,
-    timedOut: hasTimedOut(),
+
+    timedOut:
+      hasTimedOut(),
   };
 }
 
@@ -757,8 +934,11 @@ export async function handleCron(
   const store =
     new KVStoreImpl(kv);
 
-  const startedAt = Date.now();
+  const startedAt =
+    Date.now();
+
   let totalProcessed = 0;
+
   let timedOut = false;
 
   const chains:
@@ -767,18 +947,22 @@ export async function handleCron(
       "bsc",
     ];
 
-  for (const chain of chains) {
+  for (
+    const chain of chains
+  ) {
     if (
       timedOut ||
       totalProcessed >=
-      MAX_PAIRS_PER_RUN
+        MAX_PAIRS_PER_RUN
     ) {
       break;
     }
 
     try {
       const provider =
-        getProvider(chain);
+        getProvider(
+          chain
+        );
 
       const latestBlock =
         await provider.getBlockNumber();
@@ -790,6 +974,7 @@ export async function handleCron(
       const scanBlocks =
         Math.max(
           1,
+
           Math.ceil(
             15 *
               blocksPerMinute
@@ -799,6 +984,7 @@ export async function handleCron(
       const fromBlock =
         Math.max(
           0,
+
           latestBlock -
             scanBlocks
         );
@@ -812,11 +998,14 @@ export async function handleCron(
         totalProcessed <
           MAX_PAIRS_PER_RUN &&
         !timedOut &&
-        Date.now() - startedAt < MAX_RUNTIME_MS
+        Date.now() -
+            startedAt <
+          MAX_RUNTIME_MS
       ) {
         const end =
           Math.min(
             latestBlock,
+
             cursor +
               MAX_BLOCK_RANGE -
               1
@@ -825,15 +1014,21 @@ export async function handleCron(
         const result =
           await scanRange(
             provider,
+
             store,
+
             chain,
+
             cursor,
+
             end,
+
             startedAt
           );
 
         totalProcessed +=
           result.processed;
+
         timedOut =
           result.timedOut;
 
@@ -850,6 +1045,10 @@ export async function handleCron(
 
   console.log(
     `Cron scan completed: ${totalProcessed} pairs processed` +
-      (timedOut ? " (25s runtime limit reached)" : "")
+      (
+        timedOut
+          ? " (25s runtime limit reached)"
+          : ""
+      )
   );
 }

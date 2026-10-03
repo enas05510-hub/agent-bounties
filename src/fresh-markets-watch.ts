@@ -241,15 +241,19 @@ async function updateHealth(
       last_webhook:
         | string
         | null;
+
       last_cron:
         | string
         | null;
+
       last_detection_latency_ms?:
         | number
         | null;
+
       last_event_timestamp?:
         | number
         | null;
+
       last_stored_at?:
         | string
         | null;
@@ -267,8 +271,10 @@ async function updateHealth(
   if (telemetry) {
     current.last_detection_latency_ms =
       telemetry.detection_latency_ms ?? null;
+
     current.last_event_timestamp =
       telemetry.event_timestamp ?? null;
+
     current.last_stored_at =
       telemetry.stored_at ?? null;
   }
@@ -317,12 +323,30 @@ async function getHealth(
       last_cron:
         | string
         | null;
+
+      last_detection_latency_ms?:
+        | number
+        | null;
+
+      last_event_timestamp?:
+        | number
+        | null;
+
+      last_stored_at?:
+        | string
+        | null;
     }>(
       HEALTH_KEY,
       "json"
     )) ?? {
       last_webhook: null,
       last_cron: null,
+      last_detection_latency_ms:
+        null,
+      last_event_timestamp:
+        null,
+      last_stored_at:
+        null,
     };
 
   const store =
