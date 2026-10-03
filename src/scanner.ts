@@ -122,7 +122,8 @@ async function getTokenSymbol(
 
 async function getV2Liquidity(
   provider: ethers.JsonRpcProvider,
-  pair: string
+  pair: string,
+  blockTag?: number
 ): Promise<{
   token0_raw: string;
   token1_raw: string;
@@ -138,7 +139,11 @@ async function getV2Liquidity(
       );
 
     const reserves =
-      await contract.getReserves();
+      await contract.getReserves(
+        blockTag === undefined
+          ? undefined
+          : { blockTag }
+      );
 
     return {
       token0_raw:
@@ -265,7 +270,8 @@ async function processV2Event(
 
         getV2Liquidity(
           provider,
-          pair
+          pair,
+          log.blockNumber
         ),
 
         extractInitialHolders({
@@ -493,6 +499,10 @@ async function processV3Event(
           log.blockNumber
         ),
       ]);
+
+    if (holders.length < 3) {
+      holders.push(pool);
+    }
 
     const newPair: NewPair = {
       pair_address:
