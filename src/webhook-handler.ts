@@ -817,7 +817,9 @@ export async function handleWebhook(
           uniqueHolders,
 
         created_at:
-          new Date().toISOString(),
+          blockTimestamp !== null
+            ? new Date(blockTimestamp * 1000).toISOString()
+            : new Date().toISOString(),
 
         block_number:
           blockNumber,
