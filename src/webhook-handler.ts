@@ -294,6 +294,28 @@ async function getReceipt(
   );
 }
 
+async function getBlockTimestamp(
+  rpcUrl: string,
+  blockNumber: number
+): Promise<number | null> {
+  try {
+    const hex = blockNumber.toString(16);
+    const block = await rpcWithRetry(
+      rpcUrl,
+      "eth_getBlockByNumber",
+      [`0x${hex}`, false]
+    );
+
+    if (!block?.timestamp) {
+      return null;
+    }
+
+    return Number(BigInt(block.timestamp));
+  } catch {
+    return null;
+  }
+}
+
 async function getCode(
   rpcUrl: string,
   address: string
@@ -548,6 +570,9 @@ export async function handleWebhook(
 
   let processed = 0;
   let candidates = 0;
+  let lastDetectionLatencyMs: number | null = null;
+  let lastEventTimestamp: number | null = null;
+  let lastStoredAt: string | null = null;
 
   const store =
     new KVStoreImpl(
@@ -680,6 +705,16 @@ export async function handleWebhook(
         continue;
       }
 
+      const blockTimestamp = await getBlockTimestamp(
+        rpcUrl,
+        blockNumber
+      );
+
+      const detectionLatencyMs =
+        blockTimestamp === null
+          ? null
+          : Date.now() - blockTimestamp * 1000;
+
       const [
         symbol0,
         symbol1,
@@ -798,8 +833,12 @@ export async function handleWebhook(
 
       processed++;
 
+      lastDetectionLatencyMs = detectionLatencyMs;
+      lastEventTimestamp = blockTimestamp;
+      lastStoredAt = new Date().toISOString();
+
       console.log(
-        `Pair stored: ${key} | holders=${uniqueHolders.length}`
+        `Pair stored: ${key} | holders=${uniqueHolders.length} | detection_latency_ms=${detectionLatencyMs ?? "unknown"} | event_timestamp=${blockTimestamp ?? "unknown"}`
       );
     } catch (error) {
       console.warn(
@@ -815,6 +854,12 @@ export async function handleWebhook(
     candidates,
     block_number:
       blockNumber,
+    detection_latency_ms:
+      lastDetectionLatencyMs,
+    event_timestamp:
+      lastEventTimestamp,
+    stored_at:
+      lastStoredAt,
   });
 }
 
