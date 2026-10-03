@@ -21,8 +21,9 @@ import {
 const PAIR_CREATED_TOPIC =
   "0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e";
 
-const V3_POOL_CREATED_TOPIC =
-  "0x783cca1c0412dd0d695e784568c96ea0e9b7d9c5f6a7a5a0f5e0a7f7f8a8f8";
+const V3_POOL_CREATED_TOPIC = ethers.id(
+  "PoolCreated(address,address,uint24,int24,address)"
+);
 
 const MAX_BLOCK_RANGE = 2000;
 const MAX_PAIRS_PER_RUN = 100;
@@ -733,7 +734,7 @@ export async function handleCron(
         Math.max(
           1,
           Math.ceil(
-            10 *
+            15 *
               blocksPerMinute
           )
         );
