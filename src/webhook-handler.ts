@@ -1,4 +1,3 @@
-ts
 import { ethers } from "ethers";
 
 import {
@@ -656,7 +655,7 @@ export async function handleWebhook(
      * lowercase.
      */
     const chain =
-      FACTORIES[
+    FACTORY_CHAINS[
         factory.toLowerCase()
       ];
 
