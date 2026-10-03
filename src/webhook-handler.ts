@@ -738,6 +738,10 @@ export async function handleWebhook(
             holders
               .map((address) => normalizeAddress(address))
               .filter(Boolean)
+              .filter(
+                (address): address is string =>
+                  address !== null
+              )
               .map((address) => address.toLowerCase())
           )
         );
