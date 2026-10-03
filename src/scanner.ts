@@ -86,6 +86,46 @@ function toRpcBlockTag(
   }`;
 }
 
+async function getLogsCompat(
+  provider: ethers.JsonRpcProvider,
+  chain: ChainName,
+  address: string,
+  topic: string,
+  fromBlock: string,
+  toBlock: string
+): Promise<ethers.Log[]> {
+  const filter = {
+    address,
+    topics: [topic],
+    fromBlock,
+    toBlock,
+  };
+
+  try {
+    return await provider.getLogs(filter);
+  } catch (error) {
+    if (chain !== "bsc") {
+      throw error;
+    }
+
+    /*
+     * Some BSC RPC implementations reject a single topic value
+     * in this position while accepting the equivalent one-item
+     * OR-list form. The two filters have identical semantics.
+     */
+    console.warn(
+      `Retrying BSC eth_getLogs with nested topic filter for ${address}`
+    );
+
+    return await provider.getLogs({
+      address,
+      topics: [[topic]],
+      fromBlock,
+      toBlock,
+    });
+  }
+}
+
 function normalizeAddress(
   address: string
 ): string {
@@ -612,20 +652,14 @@ async function scanRange(
     }
 
     const v2Logs =
-      await provider.getLogs({
-        address:
-          factory,
-
-        topics: [
-          PAIR_CREATED_TOPIC,
-        ],
-
-        fromBlock:
-          fromBlockTag,
-
-        toBlock:
-          toBlockTag,
-      });
+      await getLogsCompat(
+        provider,
+        chain,
+        factory,
+        PAIR_CREATED_TOPIC,
+        fromBlockTag,
+        toBlockTag
+      );
 
     for (const log of v2Logs) {
       if (
@@ -666,20 +700,14 @@ async function scanRange(
       }
 
       const v3Logs =
-        await provider.getLogs({
-          address:
-            factory,
-
-          topics: [
-            V3_POOL_CREATED_TOPIC,
-          ],
-
-          fromBlock:
-            fromBlockTag,
-
-          toBlock:
-            toBlockTag,
-        });
+        await getLogsCompat(
+          provider,
+          chain,
+          factory,
+          V3_POOL_CREATED_TOPIC,
+          fromBlockTag,
+          toBlockTag
+        );
 
       for (const log of v3Logs) {
         if (
