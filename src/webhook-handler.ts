@@ -1,3 +1,4 @@
+```ts
 import { ethers } from "ethers";
 
 import {
@@ -27,8 +28,11 @@ const PAIR_CREATED_TOPIC = ethers.id(
  * IMPORTANT:
  * All keys are lowercase because lookup uses
  * factory.toLowerCase().
+ *
+ * The values MUST be ChainName, not generic string,
+ * because RPCS and pairKey expect ChainName.
  */
-const FACTORY_CHAINS: Record<string, string> = {
+const FACTORY_CHAINS: Record<string, ChainName> = {
   ["0x5c69bEe701ef814a2b6a3edd4b1652cb9cc5aa6f".toLowerCase()]:
     "ethereum",
 
@@ -655,7 +659,7 @@ export async function handleWebhook(
      * lowercase.
      */
     const chain =
-    FACTORY_CHAINS[
+      FACTORY_CHAINS[
         factory.toLowerCase()
       ];
 
@@ -1010,3 +1014,4 @@ export async function handleSignedWebhook(
     env
   );
 }
+```
