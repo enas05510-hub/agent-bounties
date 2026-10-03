@@ -26,7 +26,8 @@ const V3_POOL_CREATED_TOPIC = ethers.id(
 );
 
 const MAX_BLOCK_RANGE = 2000;
-const MAX_PAIRS_PER_RUN = 100;
+const MAX_PAIRS_PER_RUN = 20;
+const MAX_RUNTIME_MS = 25_000;
 
 const V2_FACTORIES: Record<
   ChainName,
@@ -623,9 +624,17 @@ async function scanRange(
   store: KVStoreImpl,
   chain: ChainName,
   fromBlock: number,
-  toBlock: number
-): Promise<number> {
+  toBlock: number,
+  startedAt: number
+): Promise<{ processed: number; timedOut: boolean }> {
   let processed = 0;
+
+  const hasTimedOut = () =>
+    Date.now() - startedAt >= MAX_RUNTIME_MS;
+
+  if (hasTimedOut()) {
+    return { processed, timedOut: true };
+  }
 
   const fromBlockTag =
     toRpcBlockTag(
@@ -645,6 +654,7 @@ async function scanRange(
     const factory of V2_FACTORIES[chain]
   ) {
     if (
+      hasTimedOut() ||
       processed >=
       MAX_PAIRS_PER_RUN
     ) {
@@ -663,6 +673,7 @@ async function scanRange(
 
     for (const log of v2Logs) {
       if (
+        hasTimedOut() ||
         processed >=
         MAX_PAIRS_PER_RUN
       ) {
@@ -686,6 +697,7 @@ async function scanRange(
    * Scan each V3 factory separately.
    */
   if (
+    !hasTimedOut() &&
     processed <
     MAX_PAIRS_PER_RUN
   ) {
@@ -693,6 +705,7 @@ async function scanRange(
       const factory of V3_FACTORIES[chain]
     ) {
       if (
+        hasTimedOut() ||
         processed >=
         MAX_PAIRS_PER_RUN
       ) {
@@ -711,6 +724,7 @@ async function scanRange(
 
       for (const log of v3Logs) {
         if (
+          hasTimedOut() ||
           processed >=
           MAX_PAIRS_PER_RUN
         ) {
@@ -731,7 +745,10 @@ async function scanRange(
     }
   }
 
-  return processed;
+  return {
+    processed,
+    timedOut: hasTimedOut(),
+  };
 }
 
 export async function handleCron(
@@ -740,7 +757,9 @@ export async function handleCron(
   const store =
     new KVStoreImpl(kv);
 
+  const startedAt = Date.now();
   let totalProcessed = 0;
+  let timedOut = false;
 
   const chains:
     ChainName[] = [
@@ -750,6 +769,7 @@ export async function handleCron(
 
   for (const chain of chains) {
     if (
+      timedOut ||
       totalProcessed >=
       MAX_PAIRS_PER_RUN
     ) {
@@ -790,7 +810,9 @@ export async function handleCron(
         cursor <=
           latestBlock &&
         totalProcessed <
-          MAX_PAIRS_PER_RUN
+          MAX_PAIRS_PER_RUN &&
+        !timedOut &&
+        Date.now() - startedAt < MAX_RUNTIME_MS
       ) {
         const end =
           Math.min(
@@ -800,17 +822,20 @@ export async function handleCron(
               1
           );
 
-        const processed =
+        const result =
           await scanRange(
             provider,
             store,
             chain,
             cursor,
-            end
+            end,
+            startedAt
           );
 
         totalProcessed +=
-          processed;
+          result.processed;
+        timedOut =
+          result.timedOut;
 
         cursor =
           end + 1;
@@ -824,6 +849,7 @@ export async function handleCron(
   }
 
   console.log(
-    `Cron scan completed: ${totalProcessed} pairs processed`
+    `Cron scan completed: ${totalProcessed} pairs processed` +
+      (timedOut ? " (25s runtime limit reached)" : "")
   );
 }
