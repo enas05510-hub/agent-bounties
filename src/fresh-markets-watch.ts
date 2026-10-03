@@ -273,22 +273,40 @@ async function getHealth(
 
   pairs_cached: number;
 }> {
-  const status =
-    (await kv.get<{
-      last_webhook:
-        | string
-        | null;
+ const status =
+  (await kv.get<{
+    last_webhook:
+      | string
+      | null;
 
-      last_cron:
-        | string
-        | null;
-    }>(
-      HEALTH_KEY,
-      "json"
-    )) ?? {
-      last_webhook: null,
-      last_cron: null,
-    };
+    last_cron:
+      | string
+      | null;
+
+    last_detection_latency_ms?:
+      | number
+      | null;
+
+    last_event_timestamp?:
+      | number
+      | null;
+
+    last_stored_at?:
+      | string
+      | null;
+  }>(
+    HEALTH_KEY,
+    "json"
+  )) ?? {
+    last_webhook: null,
+    last_cron: null,
+    last_detection_latency_ms:
+      null,
+    last_event_timestamp:
+      null,
+    last_stored_at:
+      null,
+  };
 
   const store =
     new KVStoreImpl(kv);
