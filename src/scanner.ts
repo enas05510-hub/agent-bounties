@@ -371,7 +371,7 @@ async function processV3Event(
 ): Promise<boolean> {
   try {
     if (
-      log.topics.length < 3
+      log.topics.length < 4
     ) {
       return false;
     }
@@ -401,7 +401,6 @@ async function processV3Event(
           .defaultAbiCoder()
           .decode(
             [
-              "uint24",
               "int24",
               "address",
             ],
@@ -410,7 +409,7 @@ async function processV3Event(
 
       pool =
         normalizeAddress(
-          parsed[2]
+          parsed[1]
         );
     } catch {
       pool = null;
