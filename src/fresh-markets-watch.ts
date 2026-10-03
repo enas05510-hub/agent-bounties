@@ -336,7 +336,7 @@ function createX402Middleware(
     new HTTPFacilitatorClient({
       url:
         env.X402_FACILITATOR_URL ??
-        "https://x402.org/facilitator",
+        "https://facilitator.daydreams.systems",
     });
 
   const resourceServer =
@@ -360,8 +360,8 @@ function createX402Middleware(
             price,
 
             network:
-              env.X402_NETWORK ??
-              "eip155:8453",
+              (env.X402_NETWORK ??
+                "eip155:8453") as `${string}:${string}`,
 
             payTo:
               env.PAY_TO,
