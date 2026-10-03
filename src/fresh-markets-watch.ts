@@ -345,7 +345,7 @@ function createX402Middleware(
     );
 
   resourceServer.register(
-    "eip155:84532",
+    "eip155:8453",
     new ExactEvmScheme()
   );
 
@@ -360,7 +360,8 @@ function createX402Middleware(
             price,
 
             network:
-              "eip155:84532",
+              env.X402_NETWORK ??
+              "eip155:8453",
 
             payTo:
               env.PAY_TO,
